@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+web/dist/
+coverage/
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+
+# Runtime data and generated user content
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+output/
+media/
+wiki/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+config/settings.yaml
+config/labels.yaml
+
+# Logs and test artifacts
+*.log
+logs/
+test-results/
+playwright-report/
+.playwright/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local agent/tool caches
+_bmad/
+_bmad-output/
+.agent/
+.agents/
+.claude/
+.codebuddy/
+.github/skills/
+.github/copilot-instructions.md
+skills-lock.json
+AGENTS.md
+.impeccable.md
+
+# Local planning docs
+README.md
