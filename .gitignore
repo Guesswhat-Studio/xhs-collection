@@ -31,6 +31,7 @@ logs/
 test-results/
 playwright-report/
 .playwright/
+.playwright-cli/
 
 # OS/editor
 .DS_Store

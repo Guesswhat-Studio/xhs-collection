@@ -17,6 +17,10 @@ const defaultFilters: NoteFiltersState = {
   showArchived: false,
 };
 
+const emptyNotes: NonNullable<ReturnType<typeof useNotesQuery>['data']>['notes'] = [];
+const emptyAccounts: string[] = [];
+const emptySuggestedLabels: string[] = [];
+
 const demoStates = [
   { value: 'default', label: 'Primary' },
   { value: 'loading', label: 'Loading' },
@@ -37,16 +41,18 @@ export function NotesPage() {
   const updateNote = useUpdateNote();
   const bulkAction = useBulkNoteAction();
 
-  const notes = notesQuery.data?.notes ?? [];
-  const accounts = notesQuery.data?.accounts ?? [];
-  const suggestedLabels = notesQuery.data?.suggestedLabels ?? [];
+  const notes = notesQuery.data?.notes ?? emptyNotes;
+  const accounts = notesQuery.data?.accounts ?? emptyAccounts;
+  const suggestedLabels = notesQuery.data?.suggestedLabels ?? emptySuggestedLabels;
   const albums = albumsQuery.data ?? [];
   const labels = labelsQuery.data ?? [];
 
   useEffect(() => {
     if (!notes.length) {
-      setActiveNoteId(null);
-      setSelectedIds([]);
+      if (activeNoteId !== null) {
+        setActiveNoteId(null);
+      }
+      setSelectedIds((current) => (current.length ? [] : current));
       return;
     }
 
