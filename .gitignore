@@ -4,19 +4,27 @@ node_modules/
 # Build output
 dist/
 build/
-web/dist/
+target/
+target-*/
+src-tauri/target*/
+src-tauri/gen/
 coverage/
 *.tsbuildinfo
-web/vite.config.js
-web/vite.config.d.ts
+vite.config.js
+vite.config.d.ts
 
 # Runtime data and generated user content
+data/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
 output/
 media/
 wiki/
+exports/
 
 # Secrets and local env
 .env
@@ -24,9 +32,13 @@ wiki/
 !.env.example
 config/settings.yaml
 config/labels.yaml
+*.pem
+*.p12
+*.mobileprovision
 
 # Logs and test artifacts
 *.log
+.tmp-*
 logs/
 test-results/
 playwright-report/
@@ -40,6 +52,7 @@ Thumbs.db
 .vscode/
 
 # Local agent/tool caches
+.tools/
 _bmad/
 _bmad-output/
 .agent/
@@ -52,5 +65,6 @@ skills-lock.json
 AGENTS.md
 .impeccable.md
 
-# Local planning docs
-README.md
+# Local planning and design work
+docs/
+design/
