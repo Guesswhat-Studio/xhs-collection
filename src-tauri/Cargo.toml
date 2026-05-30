@@ -3,6 +3,7 @@ name = "xhs-collection"
 version = "0.1.0"
 description = "Local-first desktop collection manager for Xiaohongshu favorites"
 authors = ["GuesswhatStudio"]
+license = "MIT"
 edition = "2021"
 
 [lib]

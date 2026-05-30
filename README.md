@@ -17,6 +17,12 @@
 
 > XHS Collection 是非官方工具，与小红书 / Rednote 没有关联。请只同步和下载你自己账号有权访问的内容，并遵守对应平台条款。
 
+## Project Documents
+
+- [Release Notes](RELEASE_NOTES.md)
+- [Compliance And Responsible Use](COMPLIANCE.md)
+- [MIT License](LICENSE)
+
 ## Preview
 
 ![收藏库预览](assets/screenshots/library-preview.svg)
