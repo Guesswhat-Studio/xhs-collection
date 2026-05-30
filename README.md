@@ -110,7 +110,7 @@ git push origin v0.1.0
 CI 平台矩阵：
 
 - `windows-latest`
-- `macos-latest` with `--target aarch64-apple-darwin`
+- `macos-15` with `--target aarch64-apple-darwin`
 - `ubuntu-22.04`
 
 ## Privacy
