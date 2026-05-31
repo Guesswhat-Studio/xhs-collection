@@ -8,6 +8,7 @@ mod secrets;
 mod storage;
 mod utils;
 mod xhs;
+mod xhs_extract;
 mod xhs_scripts;
 
 pub fn run() {
