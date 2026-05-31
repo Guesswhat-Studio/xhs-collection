@@ -36,11 +36,7 @@ import type {
   TagSummary,
   XhsSessionTestResult,
 } from '../types/library';
-
-function isTauriRuntime() {
-  const tauri = (window as unknown as { __TAURI_INTERNALS__?: { transformCallback?: unknown } }).__TAURI_INTERNALS__;
-  return typeof tauri?.transformCallback === 'function';
-}
+import { isTauriRuntime } from './runtime';
 
 function browserPreviewOverview(): LibraryOverview {
   const activeProfile: LocalProfileSummary = {

@@ -70,12 +70,14 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useDeferredValue, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import brandLogoUrl from '../../assets/brand/app-icon.png';
+import { coveragePercent, durationFmt, fileSize, fullDate, parseAppTime, relTime, shortDate } from './formatUtils';
 import { libraryApi } from './libraryApi';
+import { mediaAbsolutePath, mediaAspectLabel, mediaAspectStyle, mediaPreviewSrc } from './mediaUtils';
+import { coverGrad, favTimeLabel, hashSeed, matchFilter, noteFlags, noteTime, splitTagInput, type LibraryFilter } from './noteUtils';
+import { isTauriRuntime, openExternalUrl, openLocalPath } from './runtime';
 import type {
   AiSettings,
   AiSettingsInput,
@@ -105,7 +107,6 @@ import type {
 } from '../types/library';
 
 type AppView = 'library' | 'tags' | 'media' | 'sync' | 'export' | 'settings';
-type LibraryFilter = NoteStatus | 'all' | 'attention';
 type LibraryViewMode = 'grid' | 'list';
 type Theme = 'light' | 'dark';
 type FontScheme = 'sans' | 'serif' | 'kai';
@@ -219,17 +220,6 @@ function hostOf(url?: string | null) {
 function aiSettingsReady(settings: AiSettings | null) {
   return Boolean(settings?.hasApiKey && settings.baseUrl && settings.model);
 }
-
-const COVER_PALETTE: Record<string, [string, string]> = {
-  旅行: ['#84c7d9', '#4f83c5'],
-  美食: ['#f6b96b', '#e2792f'],
-  装修: ['#9aa7b8', '#5a6b80'],
-  投资: ['#9ba6e8', '#5b63c4'],
-  学习: ['#8fcf9c', '#2f9e57'],
-  购物: ['#f29bb6', '#e2588a'],
-  灵感: ['#d7a8e0', '#a85ec0'],
-  未分类: ['#c8bcc0', '#897e84'],
-};
 
 const ICONS = {
   alert: AlertTriangle,
@@ -2753,71 +2743,6 @@ function Step({ n, state, title, children, last = false }: {
       </div>
     </div>
   );
-}
-
-function joinLocalPath(base: string, relative: string) {
-  const separator = base.includes('\\') ? '\\' : '/';
-  const cleanBase = base.replace(/[\\/]+$/, '');
-  const cleanRelative = relative.replace(/^[\\/]+/, '').replace(/[\\/]+/g, separator);
-  return `${cleanBase}${separator}${cleanRelative}`;
-}
-
-function mediaAbsolutePath(asset: MediaAsset, overview: LibraryOverview | null) {
-  if (!overview?.mediaDir || !asset.relativePath) return null;
-  return joinLocalPath(overview.mediaDir, asset.relativePath);
-}
-
-function mediaPreviewSrc(asset: MediaAsset, overview: LibraryOverview | null) {
-  if (asset.mediaType === 'file') return null;
-  const absolutePath = mediaAbsolutePath(asset, overview);
-  if (!absolutePath || !isTauriRuntime()) return null;
-  return convertFileSrc(absolutePath);
-}
-
-function isTauriRuntime() {
-  if (typeof window === 'undefined') return false;
-  const tauri = (window as unknown as { __TAURI_INTERNALS__?: { transformCallback?: unknown } }).__TAURI_INTERNALS__;
-  return typeof tauri?.transformCallback === 'function';
-}
-
-function mediaAspectRatio(asset: MediaAsset) {
-  const width = Number(asset.width ?? 0);
-  const height = Number(asset.height ?? 0);
-  if (width > 0 && height > 0) return width / height;
-  if (asset.mediaType === 'video') return 9 / 16;
-  if (asset.mediaType === 'cover') return 4 / 3;
-  if (asset.mediaType === 'file') return 4 / 3;
-  return 1;
-}
-
-function mediaAspectStyle(asset: MediaAsset) {
-  const ratio = mediaAspectRatio(asset);
-  return {
-    '--media-ratio': ratio,
-    aspectRatio: `${ratio}`,
-  } as CSSProperties;
-}
-
-function mediaAspectLabel(asset: MediaAsset) {
-  if (asset.mediaType === 'file') return '文件';
-  const width = Number(asset.width ?? 0);
-  const height = Number(asset.height ?? 0);
-  const ratio = mediaAspectRatio(asset);
-  const direction = ratio < 0.85 ? '竖屏' : ratio > 1.25 ? '横屏' : '方图';
-  return width > 0 && height > 0 ? `${width} x ${height} · ${direction}` : `${direction}预览`;
-}
-
-async function openLocalPath(path: string | null, reveal = false) {
-  if (!path) return;
-  if (reveal) {
-    await revealItemInDir(path);
-  } else {
-    await openPath(path);
-  }
-}
-
-async function openExternalUrl(url: string) {
-  await openUrl(url);
 }
 
 type IdleWindow = Window & typeof globalThis & {
@@ -5617,139 +5542,4 @@ function DownloadBadge({ status }: { status: DownloadStatus }) {
       {meta.label}
     </span>
   );
-}
-
-function splitTagInput(value: string) {
-  const seen = new Set<string>();
-  return value
-    .split(/[,，;；\n\t]/)
-    .map((item) => item.trim().replace(/^#/, '').trim())
-    .filter((item) => {
-      if (!item) return false;
-      const key = item.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 32);
-}
-
-function matchFilter(note: NoteSummary, filter: LibraryFilter) {
-  if (filter === 'all') return true;
-  if (filter === 'attention') {
-    const flags = noteFlags(note);
-    return flags.remoteMissing || flags.failed || flags.coverMissing;
-  }
-  return note.status === filter;
-}
-
-function noteFlags(note: NoteSummary) {
-  const remoteMissing = Boolean(note.remoteMissingAt);
-  const failed = note.media.some((asset) => asset.downloadStatus === 'failed');
-  const pendingMedia = note.media.filter((asset) => asset.mediaType !== 'video' && asset.downloadStatus !== 'downloaded').length;
-  const hasLocalPreview = note.media.some(
-    (asset) =>
-      (asset.mediaType === 'cover' || asset.mediaType === 'image' || asset.mediaType === 'video') &&
-      asset.downloadStatus === 'downloaded',
-  );
-  const coverMissing = note.media.length > 0 && !hasLocalPreview;
-  return { remoteMissing, failed, pendingMedia, coverMissing };
-}
-
-function noteTime(note: NoteSummary) {
-  const collected = parseAppTime(note.collectedAt);
-  if (!Number.isNaN(collected)) return collected;
-  if (note.favoriteOrder) return Date.now() - note.favoriteOrder;
-  return parseAppTime(note.lastSeenAt ?? note.lastSyncedAt);
-}
-
-function coverPalette(category?: string | null): [string, string] {
-  return COVER_PALETTE[category || '未分类'] || COVER_PALETTE['未分类'];
-}
-
-function coverGrad(category?: string | null, seed = 150) {
-  const [a, b] = coverPalette(category);
-  return `linear-gradient(${seed}deg, ${a}, ${b})`;
-}
-
-function hashSeed(value?: string | null) {
-  let hash = 0;
-  for (let index = 0; index < (value || '').length; index += 1) {
-    hash = (hash * 31 + (value || '').charCodeAt(index)) % 360;
-  }
-  return 110 + (hash % 70);
-}
-
-function relTime(value?: string | null) {
-  if (!value) return '';
-  const time = parseAppTime(value);
-  if (Number.isNaN(time)) return '';
-  const diff = Date.now() - time;
-  const minute = Math.floor(diff / 60000);
-  if (minute < 1) return '刚刚';
-  if (minute < 60) return `${minute} 分钟前`;
-  const hour = Math.floor(minute / 60);
-  if (hour < 24) return `${hour} 小时前`;
-  const day = Math.floor(hour / 24);
-  if (day === 1) return '昨天';
-  if (day < 7) return `${day} 天前`;
-  if (day < 30) return `${Math.floor(day / 7)} 周前`;
-  if (day < 365) return `${Math.floor(day / 30)} 个月前`;
-  return `${Math.floor(day / 365)} 年前`;
-}
-
-function shortDate(value?: string | null) {
-  if (!value) return '';
-  const date = appDate(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function fullDate(value?: string | null) {
-  if (!value) return '-';
-  const date = appDate(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-function appDate(value?: string | null) {
-  return new Date(normalizeAppTimestamp(value));
-}
-
-function parseAppTime(value?: string | null) {
-  return appDate(value).getTime();
-}
-
-function normalizeAppTimestamp(value?: string | null) {
-  const text = (value ?? '').trim();
-  if (!text) return 'Invalid Date';
-  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)) {
-    return `${text.replace(' ', 'T')}Z`;
-  }
-  return text;
-}
-
-function fileSize(bytes?: number | null) {
-  if (!bytes) return '-';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
-function coveragePercent(value: number, total: number) {
-  if (!total) return '0%';
-  return `${Math.round((value / total) * 100)}%`;
-}
-
-function durationFmt(ms?: number | null) {
-  if (!ms) return '';
-  const seconds = Math.round(ms / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-}
-
-function favTimeLabel(note: NoteSummary) {
-  if (note.collectedAt) return `收藏于 ${relTime(note.collectedAt)}`;
-  if (note.favoriteOrder) return `收藏序 #${note.favoriteOrder}`;
-  return `同步 ${relTime(note.lastSeenAt ?? note.lastSyncedAt)}`;
 }
