@@ -1,7 +1,7 @@
 {
   "name": "xhs-collection",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -13,11 +13,14 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@fontsource-variable/noto-sans-sc": "^5.2.10",
+    "@fontsource-variable/noto-serif-sc": "^5.2.10",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-store": "^2.4.3",
     "lucide-react": "^1.17.0",
+    "lxgw-wenkai-screen-webfont": "^1.7.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

@@ -218,6 +218,295 @@ __UNWRAP_JS__
 })()
 "#;
 
+pub(crate) const XHS_ALBUMS_SCRIPT: &str = r#"
+(() => {
+__UNWRAP_JS__
+  const debug = { href: window.location.href, title: document.title || '', stateCandidates: 0, domCandidates: 0 };
+
+  function get(obj, path) {
+    let cur = obj;
+    for (const key of path) {
+      if (cur === null || cur === undefined) return undefined;
+      cur = cur[key];
+    }
+    return cur;
+  }
+
+  function first(obj, paths) {
+    for (const path of paths) {
+      const value = get(obj, path);
+      if (value !== null && value !== undefined && String(value).trim()) return String(value).trim();
+    }
+    return '';
+  }
+
+  function num(obj, paths) {
+    for (const path of paths) {
+      const value = get(obj, path);
+      const raw = String(value ?? '');
+      if (!/\d/.test(raw)) continue;
+      const parsed = Number(raw.replace(/[^\d]/g, ''));
+      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    }
+    return null;
+  }
+
+  function albumIdOf(item) {
+    return first(item, [
+      ['albumId'], ['album_id'], ['boardId'], ['board_id'], ['collectionId'], ['collection_id'],
+      ['collectId'], ['collect_id'], ['favId'], ['fav_id'],
+      ['id'], ['album', 'id'], ['board', 'id'], ['collection', 'id']
+    ]);
+  }
+
+  function albumNameOf(item) {
+    return first(item, [
+      ['name'], ['title'], ['displayTitle'], ['display_title'],
+      ['albumName'], ['album_name'], ['boardName'], ['board_name'], ['collectionName'], ['collection_name'],
+      ['album', 'name'], ['board', 'name'], ['collection', 'name']
+    ]);
+  }
+
+  function albumUrlOf(item) {
+    return first(item, [
+      ['sourceUrl'], ['source_url'], ['url'], ['link'], ['href'],
+      ['albumUrl'], ['album_url'], ['boardUrl'], ['board_url'], ['collectionUrl'], ['collection_url'],
+    ]);
+  }
+
+  function noteIdOf(item) {
+    return first(item, [
+      ['noteId'], ['note_id'],
+      ['note', 'noteId'], ['note', 'note_id'], ['note', 'id'],
+      ['noteCard', 'noteId'], ['noteCard', 'note_id'], ['noteCard', 'id'],
+      ['note_card', 'noteId'], ['note_card', 'note_id'], ['note_card', 'id']
+    ]);
+  }
+
+  function cleanAlbumUrl(raw) {
+    const text = String(raw || '').trim();
+    if (!text || text === '#' || /^javascript:/i.test(text)) return '';
+    let url = '';
+    try {
+      url = new URL(text, window.location.origin).href;
+    } catch (_) {
+      return '';
+    }
+    const lower = url.toLowerCase();
+    if (!lower.startsWith('https://www.xiaohongshu.com/') && !lower.startsWith('https://xiaohongshu.com/')) return '';
+    if (lower.includes('beian.miit.gov.cn') || lower.includes('/404') || lower.includes('source=404')) return '';
+    if (lower.includes('/explore') || lower.includes('/discovery/item')) return '';
+    if (lower.includes('subtab=note') || lower.includes('subtab=file')) return '';
+    if (/(?:\/|[?&=_-])file(?:\/|=|&|$)|fileid|file_id/.test(lower)) return '';
+    const hasDetailId = /albumid|album_id|boardid|board_id|collectionid|collection_id/.test(lower);
+    const hasDetailPath = /\/(?:album|board|collection)\//.test(lower);
+    if (lower.includes('/user/profile/') && !hasDetailId) return '';
+    if (!hasDetailId && !hasDetailPath) return '';
+    return url.replace('https://xiaohongshu.com/', 'https://www.xiaohongshu.com/');
+  }
+
+  function albumScore(item) {
+    if (!item || typeof item !== 'object') return 0;
+    if (noteIdOf(item)) return 0;
+    const id = albumIdOf(item);
+    const name = albumNameOf(item);
+    const url = cleanAlbumUrl(albumUrlOf(item));
+    const keys = Object.keys(item).join('|');
+    const hasAlbumKey = /album|board|collection|albumName|boardName|collectionName|noteCount|itemCount|itemsCount/i.test(keys);
+    if (!hasAlbumKey && !url) return 0;
+    let score = 0;
+    if (id && id.length >= 4) score += 2;
+    if (name && name.length >= 1) score += 2;
+    if (url) score += 2;
+    if (hasAlbumKey) score += 2;
+    return score >= 3 ? score : 0;
+  }
+
+  function collectAlbums(obj, path, depth, out, seen) {
+    if (!obj || depth > 7) return;
+    const data = unwrap(obj, 0);
+    if (!data || typeof data !== 'object' || seen.has(data)) return;
+    seen.add(data);
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (albumScore(item) > 0) out.push({ path, item });
+      }
+      return;
+    }
+    const keys = Object.keys(data).sort((a, b) => {
+      const rank = key => /album|collection|collect|folder|file|fav|list|item/i.test(key) ? 0 : 1;
+      return rank(a) - rank(b);
+    });
+    for (const key of keys) {
+      if (key === 'dep' || key.startsWith('__')) continue;
+      collectAlbums(data[key], path ? `${path}.${key}` : key, depth + 1, out, seen);
+    }
+  }
+
+  function albumsFromState() {
+    const state = window.__INITIAL_STATE__;
+    if (!state) return [];
+    const candidates = [];
+    collectAlbums(state, 'state', 0, candidates, new WeakSet());
+    debug.stateCandidates = candidates.length;
+    return candidates.map(entry => entry.item);
+  }
+
+  function albumsFromDom() {
+    const elements = Array.from(document.querySelectorAll([
+      'a[href]',
+      '[role="button"]',
+      '[class*="album"]',
+      '[class*="board"]',
+      '[class*="collection"]',
+    ].join(',')));
+    const candidates = elements
+      .filter(element => {
+        const anchor = element.matches && element.matches('a[href]') ? element : element.closest('a[href]');
+        const href = (element.getAttribute('href') || (anchor && anchor.getAttribute('href')) || '');
+        const text = (element.textContent || '').trim();
+        return cleanAlbumUrl(href) || /专辑|收藏夹/.test(text);
+      })
+      .map(element => {
+        const anchor = element.matches && element.matches('a[href]') ? element : element.closest('a[href]');
+        const href = (element.getAttribute('href') || (anchor && anchor.getAttribute('href')) || '');
+        const sourceUrl = cleanAlbumUrl(href);
+        const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+        const img = element.querySelector('img') || (anchor && anchor.querySelector('img'));
+        const dataId =
+          element.getAttribute('data-id') ||
+          element.getAttribute('data-album-id') ||
+          element.getAttribute('data-board-id') ||
+          element.getAttribute('data-collection-id') ||
+          '';
+        const id =
+          (sourceUrl.match(/\/album(?:\/|=)([a-zA-Z0-9_-]+)/) || [])[1] ||
+          (sourceUrl.match(/\/board(?:\/|=)([a-zA-Z0-9_-]+)/) || [])[1] ||
+          (sourceUrl.match(/\/collection(?:\/|=)([a-zA-Z0-9_-]+)/) || [])[1] ||
+          (sourceUrl.match(/\/fav(?:\/|=)([a-zA-Z0-9_-]+)/) || [])[1] ||
+          (sourceUrl.match(/[?&](?:albumId|album_id|boardId|board_id|collectionId|collection_id|id)=([a-zA-Z0-9_-]+)/) || [])[1] ||
+          dataId ||
+          '';
+        return {
+          albumId: id || sourceUrl,
+          name: text || element.getAttribute('title') || (anchor && anchor.getAttribute('title')) || '未命名专辑',
+          sourceUrl,
+          coverUrl: img ? (img.currentSrc || img.src || '') : '',
+          noteCount: num({ text }, [['text']])
+        };
+      });
+    debug.domCandidates = candidates.length;
+    return candidates;
+  }
+
+  const seen = new Set();
+  const albums = [];
+  for (const raw of [...albumsFromState(), ...albumsFromDom()]) {
+    const sourceUrl = cleanAlbumUrl(albumUrlOf(raw));
+    const id = albumIdOf(raw) || sourceUrl;
+    const name = albumNameOf(raw);
+    if (!id || !name) continue;
+    const key = `${id}|${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    albums.push({
+      albumId: id,
+      name,
+      description: first(raw, [['desc'], ['description'], ['intro']]),
+      sourceUrl,
+      coverUrl: first(raw, [['cover', 'url'], ['coverUrl'], ['cover_url'], ['image', 'url']]),
+      noteCount: num(raw, [['noteCount'], ['note_count'], ['count'], ['total'], ['itemsCount'], ['item_count']]),
+      raw
+    });
+  }
+  window.__XHS_COLLECTION_DEBUG__ = {
+    ...debug,
+    returned: albums.length,
+    scrollY: window.scrollY || document.documentElement.scrollTop || 0,
+    innerHeight: window.innerHeight || 0,
+    scrollHeight: document.documentElement.scrollHeight || document.body.scrollHeight || 0,
+    atBottom: (window.scrollY || document.documentElement.scrollTop || 0) + (window.innerHeight || 0) >= ((document.documentElement.scrollHeight || document.body.scrollHeight || 0) - 12),
+  };
+  return albums;
+})()
+"#;
+
+pub(crate) const XHS_CLICK_COLLECTION_TAB_SCRIPT: &str = r#"
+(() => {
+  const labels = __TARGET_LABELS__;
+  const debug = { href: window.location.href, labels, clicked: false, text: '', element: '', href: '' };
+
+  function visible(el) {
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  function norm(value) {
+    return String(value || '')
+      .replace(/\s+/g, '')
+      .replace(/[0-9０-９]+$/, '')
+      .trim();
+  }
+
+  function labelText(el) {
+    return norm(
+      el.innerText ||
+      el.textContent ||
+      el.getAttribute('aria-label') ||
+      el.getAttribute('title') ||
+      ''
+    );
+  }
+
+  const selector = [
+    'a[href]',
+    'button',
+    '[role="tab"]',
+    '[role="button"]',
+    '[class*="tab"]',
+    '[class*="nav"]',
+    '[class*="collect"]',
+    '[class*="fav"]',
+    '[class*="album"]',
+    '[class*="folder"]',
+    '[class*="file"]'
+  ].join(',');
+  const targets = labels.map(norm).filter(Boolean);
+  const candidates = [];
+  for (const el of Array.from(document.querySelectorAll(selector))) {
+    if (!visible(el)) continue;
+    const text = labelText(el);
+    if (!text) continue;
+    for (const target of targets) {
+      const exact = text === target;
+      if (exact || text.includes(target)) {
+        candidates.push({
+          el,
+          text,
+          exact,
+          href: el.getAttribute('href') || '',
+          score: (exact ? 4 : 0) - Math.max(0, text.length - target.length)
+        });
+      }
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
+  const picked = candidates[0];
+  if (!picked) return debug;
+  picked.el.scrollIntoView({ block: 'center', inline: 'center' });
+  picked.el.click();
+  window.scrollTo(0, 0);
+  return {
+    ...debug,
+    clicked: true,
+    text: picked.text,
+    element: picked.el.tagName || '',
+    href: picked.href
+  };
+})()
+"#;
+
 pub(crate) const XHS_FAVORITES_DEBUG_SCRIPT: &str = r#"
 (() => window.__XHS_COLLECTION_DEBUG__ || {
   href: window.location.href,

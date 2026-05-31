@@ -1,0 +1,87 @@
+# AI prompts for XHS Collection.
+# Keep dynamic runtime data (notes, tags, categories) out of this file; Rust injects it
+# after loading these editable instructions and response schemas.
+version: 1
+
+prompts:
+  test_connection:
+    system: |-
+      你是一个只输出 JSON 的连接测试助手。
+    user: |-
+      请返回 {"ok":true,"message":"connected"}，不要输出其他文本。
+
+  classify_uncategorized:
+    system: |-
+      你是本地收藏管理软件的分类器。只输出一个 JSON 对象，不要 Markdown，不要解释，不要思考过程。最终回答的第一个字符必须是 {，最后一个字符必须是 }。
+    task: |-
+      把未分类的小红书收藏归入大类。优先使用 existingCategories 中最合适的大类；只有明显没有合适大类时才创建新的中文大类，新分类 confidence 必须不低于 0.65。大类要稳定、宽泛、短，通常 2-8 个汉字，避免为单篇帖子创建过细分类。不要返回“未分类”。低置信度时 confidence 必须低于 0.45。
+
+      示例输入：
+      {"existingCategories":["计算机技术","生活方式"],"notes":[{"id":"demo-frontend","title":"React 状态管理经验","text":"整理 Zustand 和 Redux 的使用场景","tags":["React","前端"]},{"id":"demo-food","title":"东京咖啡店收藏","text":"适合旅行时打卡的店","tags":["旅行","咖啡"]}]}
+
+      示例输出：
+      {"assignments":[{"noteId":"demo-frontend","categoryName":"计算机技术","confidence":0.92,"reason":"内容是前端工程经验"},{"noteId":"demo-food","categoryName":"生活方式","confidence":0.78,"reason":"内容是旅行消费收藏"}]}
+    output_schema:
+      assignments:
+        - noteId: 输入中的 id
+          categoryName: 已有或新建的大类名
+          confidence: 0.0
+          reason: 一句简短理由
+
+  split_category:
+    system: |-
+      你是本地收藏管理软件的分类筛选器。只输出一个 JSON 对象，不要 Markdown，不要解释，不要思考过程。最终回答的第一个字符必须是 {，最后一个字符必须是 }。
+    task: |-
+      从一个大分类中筛出符合用户规则的收藏。只有明显相关时 move 才为 true；模糊、只是沾边、或无法判断时为 false。低置信度时 confidence 必须低于 0.45。
+
+      示例输入：
+      {"sourceCategory":"计算机技术","targetCategory":"前端","userRule":"筛出前端开发相关内容","notes":[{"id":"demo-ui","title":"React 组件设计","text":"按钮、弹窗和状态管理","tags":["React","UI"]},{"id":"demo-db","title":"SQLite 索引优化","text":"本地数据库查询加速","tags":["SQLite"]}]}
+
+      示例输出：
+      {"matches":[{"noteId":"demo-ui","move":true,"confidence":0.91,"reason":"明确是前端开发"},{"noteId":"demo-db","move":false,"confidence":0.18,"reason":"主题是数据库"}]}
+    output_schema:
+      matches:
+        - noteId: 输入中的 id
+          move: true
+          confidence: 0.0
+          reason: 一句简短理由
+
+  group_tags:
+    system: |-
+      你是本地收藏管理软件的标签归属助手。只输出一个 JSON 对象，不要 Markdown，不要解释，不要思考过程。最终回答的第一个字符必须是 {，最后一个字符必须是 }。
+    task: |-
+      根据已有大类和标签文本，把标签归入当前收藏大分类。groupName 必须且只能使用 existingCategories 里的分类名，不要创建新标签组。如果标签带有 categoryCandidates，优先参考这些分类计数；当标签明显属于某个分类时返回该分类，无法判断时不要返回该标签。
+
+      示例输入：
+      {"existingCategories":["计算机技术","科研与学术"],"tags":[{"name":"React","count":8,"kind":"raw","categoryCandidates":[{"category":"计算机技术","count":7}]},{"name":"SCI论文","count":5,"kind":"raw","categoryCandidates":[{"category":"科研与学术","count":4}]}]}
+
+      示例输出：
+      {"assignments":[{"tag":"React","groupName":"计算机技术","confidence":0.92,"reason":"前端技术标签"},{"tag":"SCI论文","groupName":"科研与学术","confidence":0.9,"reason":"论文科研标签"}]}
+    output_schema:
+      assignments:
+        - tag: 输入中的 name
+          groupName: 标签组名
+          confidence: 0.0
+          reason: 一句简短理由
+
+  tag_merge_suggestions:
+    system: |-
+      你是本地收藏管理软件的标签治理器。只输出一个 JSON 对象，不要 Markdown，不要解释，不要思考过程。最终回答的第一个字符必须是 {，最后一个字符必须是 }。
+    task: |-
+      找出语义重复、高度同义、或同一主体派生出来的标签合并建议。可以合并同一个作者、品牌、项目、工具、角色、作品名下面带不同场景词的标签，例如 pokopia建筑、pokopia日常、pokopia装修 可以合并为 pokopia。不要把泛化大类和普通子类合并；例如 AI 和 AI工具 不应合并，AI编程 和 AI工具 也不应合并。可以把 Agent、智能体、AIAgent、AI智能体 合并为 AI Agent。可以把 ClaudeCode、claudecode 合并为 Claude Code。
+
+      示例输出：
+      {"mergeGroups":[{"canonicalTag":"pokopia","duplicateTags":["pokopia建筑","pokopia日常","pokopia装修"],"confidence":0.88,"reason":"同一主体派生标签"},{"canonicalTag":"AI Agent","duplicateTags":["Agent","智能体","AIAgent"],"confidence":0.94,"reason":"同义标签"},{"canonicalTag":"Claude Code","duplicateTags":["ClaudeCode","claudecode"],"confidence":0.96,"reason":"大小写写法不同"}]}
+    rules:
+      - 最多返回 30 组合并建议。
+      - duplicateTags 只能使用 tags 输入里真实存在的 name。
+      - 同一主体派生标签可以合并到主体名，但短泛前缀不要合并，例如 AI、UI、UX、LLM 这类不要仅因前缀相同而合并。
+      - reason 控制在 20 个汉字以内。
+      - 只输出一个 JSON 对象，不要输出 Markdown、注释或解释。
+    return_json_shape:
+      mergeGroups:
+        - canonicalTag: 合并后的主标签，可以是已有标签或新的规范名称
+          duplicateTags:
+            - 输入列表中需要合并到主标签的原标签
+          confidence: 0.0
+          reason: 简短原因

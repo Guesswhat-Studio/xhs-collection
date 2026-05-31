@@ -1,108 +1,45 @@
-import {
-  Archive,
-  AlertTriangle,
-  ArrowLeft,
-  ArrowRight,
-  BookOpen,
-  Bookmark,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  CircleHelp,
-  Clock3,
-  CloudOff,
-  Coffee,
-  Compass,
-  Cookie,
-  Cpu,
-  CreditCard,
-  Download,
-  Edit3,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  FileDown,
-  FileText,
-  Folder,
-  FolderInput,
-  Gift,
-  GraduationCap,
-  Grid2X2,
-  HardDrive,
-  Heart,
-  History,
-  Home,
-  Hourglass,
-  Image as ImageIcon,
-  Inbox,
-  KeyRound,
-  Layers,
-  Library,
-  List,
-  Loader2,
-  LogIn,
-  MapPin,
-  Maximize2,
-  Music,
-  Palette,
-  Plane,
-  PlayCircle,
-  Plus,
-  RefreshCw,
-  RotateCw,
-  ScanLine,
-  Scissors,
-  Search,
-  Settings,
-  ShieldCheck,
-  Shirt,
-  ShoppingBag,
-  Smile,
-  Sparkles,
-  Tag,
-  Tags,
-  Trash2,
-  User,
-  Utensils,
-  Video,
-  Wifi,
-  X,
-  type LucideIcon,
-} from 'lucide-react';
-import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
-import { useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import brandLogoUrl from '../../assets/brand/app-icon.png';
+import { coveragePercent, durationFmt, fileSize, fullDate, parseAppTime, relTime, shortDate } from './formatUtils';
+import { Icon, type IconName } from './icons';
 import { libraryApi } from './libraryApi';
+import { mediaAbsolutePath, mediaAspectLabel, mediaAspectStyle, mediaPreviewSrc } from './mediaUtils';
+import { coverGrad, favTimeLabel, hashSeed, matchFilter, noteFlags, noteTime, splitTagInput, type LibraryFilter } from './noteUtils';
+import { ProfileAvatar, ProfileGate, ProfileSwitcher, Step } from './ProfileComponents';
+import { isTauriRuntime, openExternalUrl, openLocalPath } from './runtime';
+import { ProgressiveListTail, useProgressiveItems } from './useProgressiveItems';
 import type {
   AiSettings,
   AiSettingsInput,
+  AiPromptEditorItem,
+  AiPromptSettings,
   AiClassificationResult,
-  AiTagGroupResult,
+  AiJobProgress,
   BatchNoteMetadataUpdateInput,
   BatchJobProgress,
   BatchJobResult,
   DownloadStatus,
   NoteMetadataUpdateInput,
   LibraryOverview,
-  LocalProfileSummary,
+  LogFileInfo,
   MediaAsset,
   NoteStatus,
   NoteSummary,
   NoteType,
+  TagGovernanceApplyResult,
+  TagGovernanceSuggestionResult,
   TagSummary,
   XhsFavoriteSyncResult,
+  XhsAlbumSyncResult,
   XhsSessionTestResult,
   XhsSyncProgress,
 } from '../types/library';
 
 type AppView = 'library' | 'tags' | 'media' | 'sync' | 'export' | 'settings';
-type LibraryFilter = NoteStatus | 'all' | 'attention';
 type LibraryViewMode = 'grid' | 'list';
 type Theme = 'light' | 'dark';
 type FontScheme = 'sans' | 'serif' | 'kai';
-type Density = 'comfy' | 'compact';
 
 interface AccountSummary {
   nickname: string;
@@ -118,7 +55,6 @@ interface AccountSummary {
 interface Tweaks {
   theme: Theme;
   font: FontScheme;
-  density: Density;
   defaultView: LibraryViewMode;
   sidebarCollapsed: boolean;
   inspectorWidth: number;
@@ -127,7 +63,6 @@ interface Tweaks {
 const TWEAK_DEFAULTS: Tweaks = {
   theme: 'light',
   font: 'sans',
-  density: 'comfy',
   defaultView: 'grid',
   sidebarCollapsed: false,
   inspectorWidth: 560,
@@ -138,7 +73,7 @@ const VIEW_META: Record<AppView, { title: string; sub: string }> = {
   tags: { title: '分类与标签', sub: '用分类和标签把收藏拆成可处理的清单。' },
   media: { title: '媒体库', sub: '集中管理封面、图片、视频资产与下载状态。' },
   sync: { title: '连接与同步', sub: '连接你自己的账号，把收藏只读同步到本机。' },
-  export: { title: '导出与备份', sub: '把本地收藏整理成可迁移的 JSON / CSV / Markdown。' },
+  export: { title: '导出与备份', sub: '把本地收藏整理成 JSON / CSV / Markdown，或打包整库 Zip。' },
   settings: { title: '设置', sub: '外观、账号、本地存储与开发期数据。' },
 };
 
@@ -201,6 +136,7 @@ const MEDIA_TYPE_LABEL: Record<MediaAsset['mediaType'], string> = {
   video: '视频',
   image: '图片',
   cover: '封面',
+  file: '文件',
 };
 
 function hostOf(url?: string | null) {
@@ -215,110 +151,18 @@ function aiSettingsReady(settings: AiSettings | null) {
   return Boolean(settings?.hasApiKey && settings.baseUrl && settings.model);
 }
 
-const COVER_PALETTE: Record<string, [string, string]> = {
-  旅行: ['#84c7d9', '#4f83c5'],
-  美食: ['#f6b96b', '#e2792f'],
-  装修: ['#9aa7b8', '#5a6b80'],
-  投资: ['#9ba6e8', '#5b63c4'],
-  学习: ['#8fcf9c', '#2f9e57'],
-  购物: ['#f29bb6', '#e2588a'],
-  灵感: ['#d7a8e0', '#a85ec0'],
-  未分类: ['#c8bcc0', '#897e84'],
-};
-
-const ICONS = {
-  alert: AlertTriangle,
-  archive: Archive,
-  arrowLeft: ArrowLeft,
-  arrowRight: ArrowRight,
-  book: BookOpen,
-  bookmark: Bookmark,
-  briefcase: Gift,
-  camera: ImageIcon,
-  check: Check,
-  checkCircle: CheckCircle2,
-  chevronDown: ChevronDown,
-  chevronRight: ChevronRight,
-  clock: Clock3,
-  circleHelp: CircleHelp,
-  cloudOff: CloudOff,
-  coffee: Coffee,
-  compass: Compass,
-  cookie: Cookie,
-  cpu: Cpu,
-  creditCard: CreditCard,
-  download: Download,
-  edit: Edit3,
-  externalLink: ExternalLink,
-  eye: Eye,
-  eyeOff: EyeOff,
-  fileDown: FileDown,
-  fileText: FileText,
-  folder: Folder,
-  folderInput: FolderInput,
-  gift: Gift,
-  graduationCap: GraduationCap,
-  grid: Grid2X2,
-  hardDrive: HardDrive,
-  heart: Heart,
-  history: History,
-  home: Home,
-  hourglass: Hourglass,
-  image: ImageIcon,
-  inbox: Inbox,
-  key: KeyRound,
-  layers: Layers,
-  library: Library,
-  list: List,
-  loader: Loader2,
-  login: LogIn,
-  mapPin: MapPin,
-  maximize: Maximize2,
-  music: Music,
-  palette: Palette,
-  plane: Plane,
-  playLg: PlayCircle,
-  plus: Plus,
-  refresh: RefreshCw,
-  rotateCw: RotateCw,
-  scan: ScanLine,
-  scissors: Scissors,
-  search: Search,
-  searchX: Search,
-  settings: Settings,
-  shieldCheck: ShieldCheck,
-  shirt: Shirt,
-  shoppingBag: ShoppingBag,
-  smile: Smile,
-  sparkles: Sparkles,
-  tag: Tag,
-  tags: Tags,
-  trash: Trash2,
-  user: User,
-  utensils: Utensils,
-  video: Video,
-  wifi: Wifi,
-  x: X,
-} satisfies Record<string, LucideIcon>;
-
-type IconName = keyof typeof ICONS;
-
-function Icon({ name, size = 16, stroke = 2, className, style }: {
-  name: IconName;
-  size?: number;
-  stroke?: number;
-  className?: string;
-  style?: CSSProperties | null;
-}) {
-  const Cmp = ICONS[name] ?? Bookmark;
-  return <Cmp aria-hidden="true" className={className} size={size} strokeWidth={stroke} style={style ?? undefined} />;
-}
-
 function useTweaks() {
   const [t, setTweaks] = useState<Tweaks>(() => {
     try {
       const raw = localStorage.getItem('xhs_design_tweaks');
-      return raw ? { ...TWEAK_DEFAULTS, ...JSON.parse(raw) } : TWEAK_DEFAULTS;
+      const parsed = raw ? JSON.parse(raw) as Partial<Tweaks> : {};
+      return {
+        theme: parsed.theme ?? TWEAK_DEFAULTS.theme,
+        font: parsed.font ?? TWEAK_DEFAULTS.font,
+        defaultView: parsed.defaultView ?? TWEAK_DEFAULTS.defaultView,
+        sidebarCollapsed: parsed.sidebarCollapsed ?? TWEAK_DEFAULTS.sidebarCollapsed,
+        inspectorWidth: parsed.inspectorWidth ?? TWEAK_DEFAULTS.inspectorWidth,
+      };
     } catch {
       return TWEAK_DEFAULTS;
     }
@@ -328,7 +172,6 @@ function useTweaks() {
     const root = document.documentElement;
     root.setAttribute('data-theme', t.theme);
     root.setAttribute('data-font', t.font);
-    root.setAttribute('data-density', t.density);
     try {
       localStorage.setItem('xhs_design_tweaks', JSON.stringify(t));
     } catch {
@@ -634,10 +477,14 @@ export function App() {
       <div className={`body ${t.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <aside className="sidebar">
           <div className="brand">
-            <div className="brand-mark">小</div>
-            <div className="brand-text">
-              <strong>XHS Collection</strong>
-              <span>本地收藏复查台</span>
+            <div className="brand-lockup">
+              <div className="brand-mark">
+                <img alt="" src={brandLogoUrl} />
+              </div>
+              <div className="brand-text">
+                <strong>XHS Collection</strong>
+                <span>本地收藏复查台</span>
+              </div>
             </div>
             <button
               className="side-toggle"
@@ -682,7 +529,7 @@ export function App() {
 
           <div className="side-spacer" />
 
-          <div className="side-card">
+          <div className="side-card account-card">
             <div className="acct">
               <span className="acct-avatar" style={{ background: `linear-gradient(140deg, ${account.avatarTone[0]}, ${account.avatarTone[1]})` }}>
                 {account.avatarUrl ? <img alt="" src={account.avatarUrl} /> : account.nickname.slice(0, 1)}
@@ -987,6 +834,7 @@ function LibraryView({
   const [bulkCategory, setBulkCategory] = useState('');
   const [bulkTags, setBulkTags] = useState('');
   const [isBulkSaving, setIsBulkSaving] = useState(false);
+  const deferredQuery = useDeferredValue(query);
 
   const counts = useMemo(() => {
     const result = { all: notes.length, unread: 0, read: 0, outdated: 0, archived: 0, attention: 0 };
@@ -999,7 +847,7 @@ function LibraryView({
   }, [notes]);
 
   const filtered = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = deferredQuery.trim().toLowerCase();
     const normalizedCategoryScope = categoryScope?.trim().toLowerCase() ?? '';
     const normalizedTagScope = tagScope?.trim().toLowerCase() ?? '';
     return notes
@@ -1023,7 +871,13 @@ function LibraryView({
         if (sort === 'published') return parseAppTime(b.publishedAt) - parseAppTime(a.publishedAt);
         return noteTime(b) - noteTime(a);
       });
-  }, [categoryScope, filter, notes, query, sort, tagScope]);
+  }, [categoryScope, deferredQuery, filter, notes, sort, tagScope]);
+
+  const progressiveFiltered = useProgressiveItems(
+    filtered,
+    viewMode === 'grid' ? 72 : 120,
+    viewMode === 'grid' ? 72 : 160,
+  );
 
   const selected = filtered.find((note) => note.id === selectedId) ?? filtered[0] ?? null;
   const open = inspectorOpen && Boolean(selected);
@@ -1123,16 +977,6 @@ function LibraryView({
               </span>
             </button>
           ))}
-          <div className="quickbar-spacer" />
-          <button className="qstat passive" type="button">
-            <span className="qicon tone-media">
-              <Icon name="layers" size={18} />
-            </span>
-            <span>
-              <span className="qv">{overview?.mediaCount ?? notes.reduce((total, note) => total + note.media.length, 0)}</span>
-              <span className="ql">媒体资产</span>
-            </span>
-          </button>
         </div>
 
         <div className="lib-toolbar">
@@ -1223,7 +1067,7 @@ function LibraryView({
             )
           ) : viewMode === 'grid' ? (
             <div className="note-grid fade-in">
-              {filtered.map((note) => (
+              {progressiveFiltered.items.map((note) => (
                 <NoteCard
                   isSelected={selected?.id === note.id && open}
                   key={note.id}
@@ -1232,10 +1076,11 @@ function LibraryView({
                   overview={overview}
                 />
               ))}
+              <ProgressiveListTail shown={progressiveFiltered.visibleCount} total={filtered.length} />
             </div>
           ) : (
             <div className="note-list fade-in">
-              {filtered.map((note) => (
+              {progressiveFiltered.items.map((note) => (
                 <NoteRow
                   isSelected={selected?.id === note.id && open}
                   key={note.id}
@@ -1244,6 +1089,7 @@ function LibraryView({
                   overview={overview}
                 />
               ))}
+              <ProgressiveListTail shown={progressiveFiltered.visibleCount} total={filtered.length} />
             </div>
           )}
         </div>
@@ -1485,6 +1331,12 @@ function Inspector({
   const videoPreviewSrc = videoMedia ? mediaPreviewSrc(videoMedia, overview) ?? videoMedia.originalUrl ?? null : null;
   const videoPosterSrc = notePosterSource(note, overview);
   const pendingAssets = note.media.filter((asset) => asset.downloadStatus !== 'downloaded').length;
+  const richAssetCount = note.media.filter((asset) => asset.mediaType === 'image' || asset.mediaType === 'video' || asset.mediaType === 'file').length;
+  const needsMediaDiscovery = !flags.remoteMissing && (richAssetCount === 0 || (!note.content && !note.excerpt));
+  const canDownloadNoteMedia = pendingAssets > 0 || needsMediaDiscovery;
+  const downloadNoteMediaLabel = needsMediaDiscovery
+    ? '补全并下载媒体'
+    : `下载当前笔记媒体 · ${pendingAssets}`;
 
   async function saveMeta() {
     setIsSavingMeta(true);
@@ -1582,7 +1434,7 @@ function Inspector({
             <Icon name="image" size={17} />
             <div>
               <strong>本地媒体未就绪</strong>
-              {flags.failed ? '部分资产下载失败，' : ''}有 {flags.pendingMedia} 个图片/封面尚未下载。
+              {flags.failed ? '部分资产下载失败，' : ''}有 {flags.pendingMedia} 个素材尚未下载。
             </div>
           </div>
         )}
@@ -1697,13 +1549,26 @@ function Inspector({
         <div className="insp-sec">
           <h4>媒体资产 · {note.media.length}</h4>
           {note.media.length === 0 ? (
-            <p className="body-copy muted-small">这条笔记没有图片或视频资产。</p>
+            <div className="asset-list">
+              <p className="body-copy muted-small">这条笔记还没有完整媒体资产，可能只同步到了收藏卡片摘要。</p>
+              {canDownloadNoteMedia && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={isDownloadingNoteMedia}
+                  onClick={() => void downloadNoteMedia()}
+                  type="button"
+                >
+                  <Icon name={isDownloadingNoteMedia ? 'loader' : 'download'} size={15} className={isDownloadingNoteMedia ? 'spin' : ''} />
+                  {isDownloadingNoteMedia ? '补全中' : downloadNoteMediaLabel}
+                </button>
+              )}
+            </div>
           ) : (
             <div className="asset-list">
               {note.media.map((asset) => (
                 <div className="asset" key={asset.id}>
                   <span className="asset-thumb" style={{ background: coverGrad(note.categoryName, hashSeed(asset.id)) }}>
-                    <Icon name={asset.mediaType === 'video' ? 'video' : 'image'} size={16} style={{ color: '#fff' }} />
+                    <Icon name={asset.mediaType === 'video' ? 'video' : asset.mediaType === 'file' ? 'fileText' : 'image'} size={16} style={{ color: '#fff' }} />
                   </span>
                   <div className="asset-info">
                     <strong>
@@ -1715,7 +1580,7 @@ function Inspector({
                   <DownloadBadge status={asset.downloadStatus} />
                 </div>
               ))}
-              {pendingAssets > 0 && (
+              {canDownloadNoteMedia && (
                 <button
                   className="btn btn-ghost btn-sm"
                   disabled={isDownloadingNoteMedia}
@@ -1723,7 +1588,7 @@ function Inspector({
                   type="button"
                 >
                   <Icon name={isDownloadingNoteMedia ? 'loader' : 'download'} size={15} className={isDownloadingNoteMedia ? 'spin' : ''} />
-                  {isDownloadingNoteMedia ? '下载中' : `下载当前笔记媒体 · ${pendingAssets}`}
+                  {isDownloadingNoteMedia ? '补全中' : downloadNoteMediaLabel}
                 </button>
               )}
             </div>
@@ -1788,7 +1653,7 @@ function SyncView({
   overview: LibraryOverview | null;
   savedSession: XhsSessionTestResult | null;
   onSessionChange: (session: XhsSessionTestResult | null) => void;
-  onSynced: (summary: XhsFavoriteSyncResult) => void;
+  onSynced: (summary: { message: string }) => void;
   onSwitchProfile: (profileId: string) => Promise<void> | void;
 }) {
   const [cookie, setCookie] = useState('');
@@ -1796,24 +1661,40 @@ function SyncView({
   const [isOpeningLogin, setIsOpeningLogin] = useState(false);
   const [isReadingLogin, setIsReadingLogin] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingAlbums, setIsSyncingAlbums] = useState(false);
+  const [isSyncingFiles, setIsSyncingFiles] = useState(false);
+  const [isCancellingSync, setIsCancellingSync] = useState(false);
   const [result, setResult] = useState<XhsSessionTestResult | null>(null);
   const [syncResult, setSyncResult] = useState<XhsFavoriteSyncResult | null>(null);
+  const [albumResult, setAlbumResult] = useState<XhsAlbumSyncResult | null>(null);
+  const [fileResult, setFileResult] = useState<XhsFavoriteSyncResult | null>(null);
   const [syncProgress, setSyncProgress] = useState<XhsSyncProgress | null>(null);
+  const [detailProgress, setDetailProgress] = useState<BatchJobProgress | null>(null);
+  const [detailResult, setDetailResult] = useState<BatchJobResult | null>(null);
   const [hasEmbeddedSession, setHasEmbeddedSession] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [notice, setNotice] = useState('');
   const [showCookie, setShowCookie] = useState(false);
   const [showHelp, setShowHelp] = useState(true);
+  const [isEnrichingDetails, setIsEnrichingDetails] = useState(false);
 
   const postSyncActivePhases = ['post_sync_preparing', 'enriching_details', 'downloading_covers', 'downloading_initial_media'];
   const isPostSyncRunning = Boolean(syncProgress && postSyncActivePhases.includes(syncProgress.phase) && !isSyncing);
-  const isBusy = isTesting || isOpeningLogin || isReadingLogin || isSyncing || isPostSyncRunning;
+  const isBusy = isTesting || isOpeningLogin || isReadingLogin || isSyncing || isSyncingAlbums || isSyncingFiles || isPostSyncRunning || isEnrichingDetails;
+  const canCancelSync = isSyncing || isSyncingAlbums || isSyncingFiles || isPostSyncRunning || isEnrichingDetails;
   const canSyncFavorites = hasEmbeddedSession && !isBusy;
+  const coverage = overview?.contentCoverage ?? null;
+  const coverageTotal = coverage?.totalNotes ?? overview?.notesCount ?? 0;
+  const needsDetailCoverage = coverageTotal > 0 && Boolean((coverage?.missingDetailNotes ?? 0) > 0 || (coverage?.missingTagNotes ?? 0) > 0);
+  const canEnrichDetails = hasEmbeddedSession && !isBusy && needsDetailCoverage;
   const progressPercent = syncProgress?.progress ?? (syncResult ? 100 : isSyncing ? 5 : 0);
+  const detailProgressPercent = detailProgress?.progress ?? (detailResult ? 100 : isEnrichingDetails ? 5 : 0);
   const isSyncComplete =
     syncProgress?.phase === 'completed' ||
+    syncProgress?.phase === 'albums_completed' ||
+    syncProgress?.phase === 'cancelled' ||
     syncProgress?.phase === 'post_sync_completed' ||
-    Boolean(syncResult && !isSyncing && !isPostSyncRunning);
+    Boolean((syncResult || albumResult || fileResult) && !isSyncing && !isSyncingAlbums && !isSyncingFiles && !isPostSyncRunning);
   const isProgressIndeterminate = Boolean(syncProgress?.indeterminate && !isSyncComplete);
   const planText = syncProgress?.planned ? `${syncProgress.planned}` : syncResult?.remoteDisplayCount ? `${syncResult.remoteDisplayCount}` : '自动读取';
   const scannedText = syncProgress?.scanned ?? syncProgress?.fetched ?? syncResult?.scanned ?? 0;
@@ -1821,14 +1702,51 @@ function SyncView({
   const writtenText = syncProgress?.written ?? (syncResult ? syncResult.inserted + syncResult.updated + syncResult.skipped : 0);
   const stepConnectDone = hasEmbeddedSession || Boolean(result?.ok) || Boolean(notice.includes('登录窗口已打开'));
   const stepVerifyDone = hasEmbeddedSession;
-  const stepSyncDone = Boolean(syncResult);
+  const stepSyncDone = Boolean(syncResult || albumResult || fileResult);
   const currentStep = !stepConnectDone ? 1 : !stepVerifyDone ? 2 : !stepSyncDone ? 3 : 4;
+
+  function markSyncCancelled() {
+    setSyncProgress({
+      phase: 'cancelled',
+      label: '同步已终止',
+      detail: '同步任务已按你的请求停止。已写入的数据会保留在本地库中。',
+      planned: syncProgress?.planned ?? 0,
+      scanned: syncProgress?.scanned ?? 0,
+      fetched: syncProgress?.fetched ?? 0,
+      toSync: syncProgress?.toSync ?? null,
+      written: syncProgress?.written ?? 0,
+      inserted: syncProgress?.inserted ?? 0,
+      updated: syncProgress?.updated ?? 0,
+      skipped: syncProgress?.skipped ?? 0,
+      existingSkipped: syncProgress?.existingSkipped ?? 0,
+      progress: 100,
+      indeterminate: false,
+    });
+    setNotice('同步已终止。');
+  }
 
   useEffect(() => {
     if (!isTauriRuntime()) return undefined;
     let cleanup: (() => void) | undefined;
     listen<XhsSyncProgress>('xhs-sync-progress', (event) => {
       setSyncProgress(event.payload);
+      setNotice(event.payload.detail);
+    })
+      .then((unlisten) => {
+        cleanup = unlisten;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+    let cleanup: (() => void) | undefined;
+    listen<BatchJobProgress>('xhs-detail-progress', (event) => {
+      setDetailProgress(event.payload);
       setNotice(event.payload.detail);
     })
       .then((unlisten) => {
@@ -1963,11 +1881,188 @@ function SyncView({
       setNotice(summary.message);
       onSynced(summary);
     } catch (syncError) {
-      setErrorMessage(syncError instanceof Error ? syncError.message : '同步收藏失败。');
-      setNotice('同步没有完成。');
-      setSyncProgress(null);
+      const message = syncError instanceof Error ? syncError.message : '同步收藏失败。';
+      if (message.includes('同步已终止')) {
+        markSyncCancelled();
+      } else {
+        setErrorMessage(message);
+        setNotice('同步没有完成。');
+        setSyncProgress(null);
+      }
     } finally {
       setIsSyncing(false);
+      setIsCancellingSync(false);
+    }
+  }
+
+  async function handleSyncAlbums() {
+    if (!hasEmbeddedSession) {
+      setErrorMessage('请先在内置登录窗口完成登录，并点击“读取并测试”。');
+      return;
+    }
+    setIsSyncingAlbums(true);
+    setErrorMessage('');
+    setAlbumResult(null);
+    setSyncProgress({
+      phase: 'syncing_albums',
+      label: '准备同步专辑',
+      detail: '正在读取收藏专辑列表，并尝试进入专辑同步其中的笔记。',
+      planned: 0,
+      scanned: 0,
+      fetched: 0,
+      toSync: null,
+      written: 0,
+      inserted: 0,
+      updated: 0,
+      skipped: 0,
+      existingSkipped: 0,
+      progress: 5,
+      indeterminate: true,
+    });
+    setNotice('正在同步小红书收藏专辑。');
+    try {
+      const summary = await libraryApi.syncXhsAlbums({ maxAlbums: 80, maxNotesPerAlbum: 400 });
+      setAlbumResult(summary);
+      setSyncProgress({
+        phase: 'albums_completed',
+        label: '专辑同步完成',
+        detail: summary.message,
+        planned: summary.albumsScanned,
+        scanned: summary.albumsScanned,
+        fetched: summary.notesScanned,
+        toSync: summary.notesLinked,
+        written: summary.notesLinked,
+        inserted: summary.notesInserted,
+        updated: summary.notesUpdated,
+        skipped: summary.skipped,
+        existingSkipped: summary.duplicateNotes,
+        progress: 100,
+        indeterminate: false,
+      });
+      setNotice(summary.message);
+      onSynced(summary);
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : '同步专辑失败。';
+      if (message.includes('同步已终止')) {
+        markSyncCancelled();
+      } else {
+        setErrorMessage(message);
+        setNotice('专辑同步没有完成。');
+        setSyncProgress(null);
+      }
+    } finally {
+      setIsSyncingAlbums(false);
+      setIsCancellingSync(false);
+    }
+  }
+
+  async function handleSyncFiles() {
+    if (!hasEmbeddedSession) {
+      setErrorMessage('请先在内置登录窗口完成登录，并点击“读取并测试”。');
+      return;
+    }
+    setIsSyncingFiles(true);
+    setErrorMessage('');
+    setFileResult(null);
+    setSyncProgress({
+      phase: 'syncing_files',
+      label: '准备同步文件',
+      detail: '正在读取小红书收藏文件页，并补全可识别的文件媒体资产。',
+      planned: 0,
+      scanned: 0,
+      fetched: 0,
+      toSync: null,
+      written: 0,
+      inserted: 0,
+      updated: 0,
+      skipped: 0,
+      existingSkipped: 0,
+      progress: 5,
+      indeterminate: true,
+    });
+    setNotice('正在同步小红书收藏文件。');
+    try {
+      const summary = await libraryApi.syncXhsFiles({ fullSync: true });
+      setFileResult(summary);
+      setSyncProgress({
+        phase: 'completed',
+        label: '文件同步完成',
+        detail: summary.message,
+        planned: summary.remoteDisplayCount ?? summary.scanned,
+        scanned: summary.scanned,
+        fetched: summary.scanned,
+        toSync: summary.fetched,
+        written: summary.inserted + summary.updated + summary.skipped,
+        inserted: summary.inserted,
+        updated: summary.updated,
+        skipped: summary.skipped,
+        existingSkipped: summary.existingSkipped,
+        progress: 100,
+        indeterminate: false,
+      });
+      setNotice(summary.message);
+      onSynced(summary);
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : '同步文件失败。';
+      if (message.includes('同步已终止')) {
+        markSyncCancelled();
+      } else {
+        setErrorMessage(message);
+        setNotice('文件同步没有完成。');
+        setSyncProgress(null);
+      }
+    } finally {
+      setIsSyncingFiles(false);
+      setIsCancellingSync(false);
+    }
+  }
+
+  async function handleContinueDetails() {
+    setIsEnrichingDetails(true);
+    setErrorMessage('');
+    setDetailResult(null);
+    setDetailProgress({
+      phase: 'preparing',
+      label: '准备补全详情',
+      detail: '正在继续补全所有待处理收藏的正文、标签和完整媒体地址。',
+      planned: 0,
+      scanned: 0,
+      updated: 0,
+      downloaded: 0,
+      failed: 0,
+      skipped: 0,
+      progress: 3,
+      indeterminate: true,
+    });
+    setNotice('正在继续补全正文和标签。');
+    try {
+      const result = await libraryApi.enrichXhsNoteDetails({});
+      setDetailResult(result);
+      setNotice(result.message);
+      await onSynced(result);
+    } catch (syncError) {
+      const message = formatErrorMessage(syncError, '补全详情失败。');
+      if (message.includes('同步已终止')) {
+        markSyncCancelled();
+      } else {
+        setErrorMessage(message);
+        setNotice('详情补全没有完成。');
+      }
+    } finally {
+      setIsEnrichingDetails(false);
+      setIsCancellingSync(false);
+    }
+  }
+
+  async function handleCancelSync() {
+    setIsCancellingSync(true);
+    setErrorMessage('');
+    setNotice('正在终止同步，当前步骤结束后会停止。');
+    try {
+      await libraryApi.cancelXhsSync();
+    } catch (syncError) {
+      setErrorMessage(syncError instanceof Error ? syncError.message : '终止同步失败。');
+      setIsCancellingSync(false);
     }
   }
 
@@ -2031,6 +2126,30 @@ function SyncView({
 
               <Step n={3} state={stepSyncDone ? 'done' : currentStep === 3 ? 'active' : ''} title="同步收藏">
                 <p>自动滚动收藏页、读取每条笔记，并按笔记 ID 去重写入本地库。只读，不会改动你的小红书。</p>
+                {coverage && coverageTotal > 0 && (
+                  <div className="step-card">
+                    <div className="result-grid coverage-grid">
+                      <div>
+                        <small>本地收藏</small>
+                        <strong>{coverageTotal}</strong>
+                      </div>
+                      <div className={coverage.missingDetailNotes > 0 ? 'warn' : 'hl'}>
+                        <small>正文覆盖</small>
+                        <strong>{coverage.detailNotes} / {coverageTotal}</strong>
+                        <span>{coveragePercent(coverage.detailNotes, coverageTotal)}</span>
+                      </div>
+                      <div className={coverage.missingTagNotes > 0 ? 'warn' : 'hl'}>
+                        <small>标签覆盖</small>
+                        <strong>{coverage.taggedNotes} / {coverageTotal}</strong>
+                        <span>{coveragePercent(coverage.taggedNotes, coverageTotal)}</span>
+                      </div>
+                      <div>
+                        <small>唯一标签</small>
+                        <strong>{coverage.uniqueTags}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div className="step-actions">
                   <button className="btn btn-primary btn-sm" disabled={!canSyncFavorites} onClick={() => handleSyncFavorites()} type="button">
                     <Icon name={isSyncing ? 'loader' : 'refresh'} size={15} className={isSyncing ? 'spin' : ''} />
@@ -2040,10 +2159,30 @@ function SyncView({
                     <Icon name="scan" size={15} />
                     完整同步
                   </button>
+                  <button className="btn btn-ghost btn-sm" disabled={!canSyncFavorites} onClick={handleSyncAlbums} type="button">
+                    <Icon name={isSyncingAlbums ? 'loader' : 'folder'} size={15} className={isSyncingAlbums ? 'spin' : ''} />
+                    同步专辑
+                  </button>
+                  <button className="btn btn-ghost btn-sm" disabled={!canSyncFavorites} onClick={handleSyncFiles} type="button">
+                    <Icon name={isSyncingFiles ? 'loader' : 'fileText'} size={15} className={isSyncingFiles ? 'spin' : ''} />
+                    同步文件
+                  </button>
+                  {needsDetailCoverage && (
+                    <button className="btn btn-ghost btn-sm" disabled={!canEnrichDetails} onClick={handleContinueDetails} type="button">
+                      <Icon name={isEnrichingDetails ? 'loader' : 'book'} size={15} className={isEnrichingDetails ? 'spin' : ''} />
+                      {isEnrichingDetails ? '补全中' : '继续补全正文/标签'}
+                    </button>
+                  )}
                   {syncResult?.limitReached && (
                     <button className="btn btn-ghost btn-sm" disabled={!canSyncFavorites} onClick={() => handleSyncFavorites({ resume: true, fullSync: true })} type="button">
                       <Icon name="arrowRight" size={15} />
                       继续下一批
+                    </button>
+                  )}
+                  {canCancelSync && (
+                    <button className="btn btn-danger btn-sm" disabled={isCancellingSync} onClick={() => void handleCancelSync()} type="button">
+                      <Icon name={isCancellingSync ? 'loader' : 'x'} size={15} className={isCancellingSync ? 'spin' : ''} />
+                      {isCancellingSync ? '终止中' : '终止同步'}
                     </button>
                   )}
                 </div>
@@ -2097,6 +2236,44 @@ function SyncView({
                     )}
                   </div>
                 )}
+
+                {(detailProgress || detailResult) && (
+                  <div className="step-card">
+                    <div className="prog-head">
+                      <strong>
+                        <Icon
+                          name={detailProgress?.phase === 'completed' || detailResult ? 'checkCircle' : isEnrichingDetails ? 'loader' : 'book'}
+                          size={15}
+                          className={isEnrichingDetails ? 'spin' : ''}
+                        />
+                        {detailProgress?.label ?? '详情补全'}
+                      </strong>
+                      <span>{Math.max(0, Math.min(100, detailProgressPercent))}%</span>
+                    </div>
+                    <div className={`prog-track ${detailProgress?.indeterminate ? 'indeterminate' : ''}`} role="progressbar" aria-valuemax={100} aria-valuemin={0} aria-valuenow={detailProgress?.indeterminate ? undefined : detailProgressPercent}>
+                      <div className="prog-fill" style={{ width: `${Math.max(4, Math.min(100, detailProgressPercent))}%` }} />
+                    </div>
+                    <p className="prog-detail">{detailProgress?.detail ?? detailResult?.message ?? '正在补全详情。'}</p>
+                    <div className="prog-stats">
+                      <div>
+                        <small>计划</small>
+                        <strong>{detailProgress?.planned ?? 0}</strong>
+                      </div>
+                      <div>
+                        <small>已处理</small>
+                        <strong>{detailProgress?.scanned ?? detailResult?.scanned ?? 0}</strong>
+                      </div>
+                      <div>
+                        <small>补全</small>
+                        <strong>{detailProgress?.updated ?? detailResult?.updated ?? 0}</strong>
+                      </div>
+                      <div>
+                        <small>失败</small>
+                        <strong>{detailProgress?.failed ?? detailResult?.failed ?? 0}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </Step>
 
               <Step last n={4} state={stepSyncDone ? 'done' : ''} title="查看结果">
@@ -2146,8 +2323,76 @@ function SyncView({
                       </div>
                     </div>
                   </div>
-                ) : (
+                ) : !albumResult && !fileResult ? (
                   <p className="muted-small">还没有同步记录。</p>
+                ) : null}
+                {albumResult && (
+                  <div className="step-card">
+                    <div className="note-banner ok result-banner">
+                      <Icon name="folder" size={16} stroke={2.3} />
+                      <div>{albumResult.message}</div>
+                    </div>
+                    <div className="result-grid">
+                      <div>
+                        <small>专辑</small>
+                        <strong>{albumResult.albumsUpdated}</strong>
+                      </div>
+                      <div>
+                        <small>扫描笔记</small>
+                        <strong>{albumResult.notesScanned}</strong>
+                      </div>
+                      <div className="hl">
+                        <small>关联</small>
+                        <strong>{albumResult.notesLinked}</strong>
+                      </div>
+                      <div>
+                        <small>新增</small>
+                        <strong>{albumResult.notesInserted}</strong>
+                      </div>
+                      <div>
+                        <small>更新</small>
+                        <strong>{albumResult.notesUpdated}</strong>
+                      </div>
+                      <div>
+                        <small>已有去重</small>
+                        <strong>{albumResult.duplicateNotes}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {fileResult && (
+                  <div className="step-card">
+                    <div className="note-banner ok result-banner">
+                      <Icon name="fileText" size={16} stroke={2.3} />
+                      <div>{fileResult.message}</div>
+                    </div>
+                    <div className="result-grid">
+                      <div>
+                        <small>扫描</small>
+                        <strong>{fileResult.scanned}</strong>
+                      </div>
+                      <div className="hl">
+                        <small>新增</small>
+                        <strong>{fileResult.inserted}</strong>
+                      </div>
+                      <div>
+                        <small>更新</small>
+                        <strong>{fileResult.updated}</strong>
+                      </div>
+                      <div>
+                        <small>详情补全</small>
+                        <strong>{fileResult.detailsUpdated ?? 0}</strong>
+                      </div>
+                      <div>
+                        <small>文件/媒体</small>
+                        <strong>{fileResult.mediaDownloaded ?? 0}</strong>
+                      </div>
+                      <div>
+                        <small>失败</small>
+                        <strong>{(fileResult.detailsFailed ?? 0) + (fileResult.mediaFailed ?? 0)}</strong>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </Step>
             </div>
@@ -2179,6 +2424,7 @@ function SyncView({
                 <li>登录与读取都在本机的内置窗口完成，登录态优先保存到系统 Keychain，后续会先校验再复用。</li>
                 <li>同步是只读的，只从小红书读取你的收藏，不写回、不改动账号。</li>
                 <li>以「来源 + 笔记 ID」去重，重复同步不会产生重复收藏。</li>
+                <li>专辑同步会把可识别的收藏专辑写成本地集合；同一篇笔记只保存一份，再建立专辑关联。</li>
                 <li>读到收藏页末尾自动停止；触发滚动保护时可继续下一批。</li>
                 <li>远端已删除的笔记会被标记为「远端缺失」，正文仍在本地保留。</li>
               </ol>
@@ -2219,190 +2465,6 @@ function SyncView({
   );
 }
 
-function ProfileSwitcher({
-  overview,
-  onSwitchProfile,
-}: {
-  overview: LibraryOverview | null;
-  onSwitchProfile: (profileId: string) => Promise<void> | void;
-}) {
-  const profiles = overview?.profiles ?? [];
-  if (profiles.length === 0) return null;
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <Icon name="user" size={16} />
-        <h3>本地账号</h3>
-        <span className="count">{profiles.length}</span>
-      </div>
-      <div className="profile-list">
-        {profiles.map((profile) => (
-          <button
-            className={`profile-row ${profile.isActive ? 'active' : ''}`}
-            disabled={profile.isActive}
-            key={profile.id}
-            onClick={() => onSwitchProfile(profile.id)}
-            type="button"
-          >
-            <ProfileAvatar profile={profile} />
-            <span className="profile-main">
-              <strong>{profile.displayName || '本机账号'}</strong>
-              <span>{profile.sourceAccountId ? `xhs:${profile.sourceAccountId}` : '未绑定小红书'}</span>
-            </span>
-            {profile.isActive ? <Icon name="checkCircle" size={15} /> : <Icon name="chevronRight" size={15} />}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ProfileGate({
-  overview,
-  onSelect,
-  onClose,
-  onConnectNew,
-}: {
-  overview: LibraryOverview;
-  onSelect: (profileId: string) => Promise<void> | void;
-  onClose: () => void;
-  onConnectNew: () => void;
-}) {
-  return (
-    <div className="profile-gate" role="dialog" aria-modal="true" aria-label="选择本地账号">
-      <div className="profile-gate-panel">
-        <div className="profile-gate-head">
-          <span className="acct-avatar sync-head-icon">
-            <Icon name="user" size={16} style={{ color: '#fff' }} />
-          </span>
-          <div>
-            <h2>选择本地账号</h2>
-            <p>每个本地账号绑定一个小红书账号，并使用独立 SQLite 与媒体目录。</p>
-          </div>
-        </div>
-        <div className="profile-gate-list">
-          {overview.profiles.map((profile) => (
-            <button
-              className={`profile-gate-row ${profile.isActive ? 'active' : ''}`}
-              key={profile.id}
-              onClick={() => onSelect(profile.id)}
-              type="button"
-            >
-              <ProfileAvatar profile={profile} />
-              <span className="profile-main">
-                <strong>{profile.displayName}</strong>
-                <span>{profile.sourceAccountId ? `xhs:${profile.sourceAccountId}` : '未绑定小红书'}</span>
-              </span>
-              {profile.isActive && <span className="conn-status">当前</span>}
-            </button>
-          ))}
-        </div>
-        <div className="profile-gate-actions">
-          <button className="btn btn-ghost" onClick={onClose} type="button">
-            <Icon name="check" size={15} />
-            继续使用当前
-          </button>
-          <button className="btn btn-primary" onClick={onConnectNew} type="button">
-            <Icon name="login" size={15} />
-            连接新账号
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ProfileAvatar({ profile }: { profile: LocalProfileSummary }) {
-  return (
-    <span className="profile-avatar">
-      {profile.avatarUrl ? <img alt="" src={profile.avatarUrl} /> : (profile.displayName || '本').slice(0, 1)}
-    </span>
-  );
-}
-
-function Step({ n, state, title, children, last = false }: {
-  n: number;
-  state?: 'done' | 'active' | '';
-  title: string;
-  children: ReactNode;
-  last?: boolean;
-}) {
-  return (
-    <div className={`step ${state ?? ''}`}>
-      <div className="step-rail">
-        <div className="step-num">{state === 'done' ? <Icon name="check" size={16} stroke={2.6} /> : n}</div>
-        {!last && <div className="step-line" />}
-      </div>
-      <div className="step-body">
-        <h3>{title}</h3>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function joinLocalPath(base: string, relative: string) {
-  const separator = base.includes('\\') ? '\\' : '/';
-  const cleanBase = base.replace(/[\\/]+$/, '');
-  const cleanRelative = relative.replace(/^[\\/]+/, '').replace(/[\\/]+/g, separator);
-  return `${cleanBase}${separator}${cleanRelative}`;
-}
-
-function mediaAbsolutePath(asset: MediaAsset, overview: LibraryOverview | null) {
-  if (!overview?.mediaDir || !asset.relativePath) return null;
-  return joinLocalPath(overview.mediaDir, asset.relativePath);
-}
-
-function mediaPreviewSrc(asset: MediaAsset, overview: LibraryOverview | null) {
-  const absolutePath = mediaAbsolutePath(asset, overview);
-  if (!absolutePath || !isTauriRuntime()) return null;
-  return convertFileSrc(absolutePath);
-}
-
-function isTauriRuntime() {
-  if (typeof window === 'undefined') return false;
-  const tauri = (window as unknown as { __TAURI_INTERNALS__?: { transformCallback?: unknown } }).__TAURI_INTERNALS__;
-  return typeof tauri?.transformCallback === 'function';
-}
-
-function mediaAspectRatio(asset: MediaAsset) {
-  const width = Number(asset.width ?? 0);
-  const height = Number(asset.height ?? 0);
-  if (width > 0 && height > 0) return width / height;
-  if (asset.mediaType === 'video') return 9 / 16;
-  if (asset.mediaType === 'cover') return 4 / 3;
-  return 1;
-}
-
-function mediaAspectStyle(asset: MediaAsset) {
-  const ratio = mediaAspectRatio(asset);
-  return {
-    '--media-ratio': ratio,
-    aspectRatio: `${ratio}`,
-  } as CSSProperties;
-}
-
-function mediaAspectLabel(asset: MediaAsset) {
-  const width = Number(asset.width ?? 0);
-  const height = Number(asset.height ?? 0);
-  const ratio = mediaAspectRatio(asset);
-  const direction = ratio < 0.85 ? '竖屏' : ratio > 1.25 ? '横屏' : '方图';
-  return width > 0 && height > 0 ? `${width} x ${height} · ${direction}` : `${direction}预览`;
-}
-
-async function openLocalPath(path: string | null, reveal = false) {
-  if (!path) return;
-  if (reveal) {
-    await revealItemInDir(path);
-  } else {
-    await openPath(path);
-  }
-}
-
-async function openExternalUrl(url: string) {
-  await openUrl(url);
-}
-
 function MediaView({ notes, overview, onOpenNote, onChanged }: {
   notes: NoteSummary[];
   overview: LibraryOverview | null;
@@ -2418,6 +2480,8 @@ function MediaView({ notes, overview, onOpenNote, onChanged }: {
   const [jobResult, setJobResult] = useState<BatchJobResult | null>(null);
   const [jobError, setJobError] = useState('');
   const [busy, setBusy] = useState<'batch-download' | 'asset-download' | ''>('');
+  const deferredTypeFilter = useDeferredValue(typeFilter);
+  const deferredStatusFilter = useDeferredValue(statusFilter);
 
   useEffect(() => {
     if (selectedId && items.some((item) => item.asset.id === selectedId)) return;
@@ -2453,15 +2517,18 @@ function MediaView({ notes, overview, onOpenNote, onChanged }: {
     );
   }, [items]);
 
-  const shown = items.filter(({ asset }) => {
-    const typeOk = typeFilter === 'all' || asset.mediaType === typeFilter;
-    const statusOk =
-      statusFilter === 'all' ||
-      (statusFilter === 'downloaded' && asset.downloadStatus === 'downloaded') ||
-      (statusFilter === 'failed' && asset.downloadStatus === 'failed') ||
-      (statusFilter === 'pending' && ['not_downloaded', 'queued', 'downloading'].includes(asset.downloadStatus));
-    return typeOk && statusOk;
-  });
+  const shown = useMemo(() => {
+    return items.filter(({ asset }) => {
+      const typeOk = deferredTypeFilter === 'all' || asset.mediaType === deferredTypeFilter;
+      const statusOk =
+        deferredStatusFilter === 'all' ||
+        (deferredStatusFilter === 'downloaded' && asset.downloadStatus === 'downloaded') ||
+        (deferredStatusFilter === 'failed' && asset.downloadStatus === 'failed') ||
+        (deferredStatusFilter === 'pending' && ['not_downloaded', 'queued', 'downloading'].includes(asset.downloadStatus));
+      return typeOk && statusOk;
+    });
+  }, [deferredStatusFilter, deferredTypeFilter, items]);
+  const progressiveShown = useProgressiveItems(shown, size === 'l' ? 72 : 120, size === 'l' ? 72 : 160);
   const selected = items.find((item) => item.asset.id === selectedId) ?? shown[0] ?? items[0] ?? null;
   const tileSize = { s: 122, m: 158, l: 204 }[size];
   const pendingAssets = summary.pending + summary.failed;
@@ -2528,7 +2595,7 @@ function MediaView({ notes, overview, onOpenNote, onChanged }: {
     return (
       <div className="panel empty-panel">
         <EmptyState
-          desc="同步收藏后，每条笔记的封面、图片和视频会出现在这里，像素材库一样按类型与下载状态集中整理。"
+          desc="同步收藏后，每条笔记的封面、图片、视频和可识别文件会出现在这里，像素材库一样按类型与下载状态集中整理。"
           icon="layers"
           title="还没有媒体资产"
         />
@@ -2546,6 +2613,7 @@ function MediaView({ notes, overview, onOpenNote, onChanged }: {
               ['image', '图片'],
               ['video', '视频'],
               ['cover', '封面'],
+              ['file', '文件'],
             ] as Array<[typeof typeFilter, string]>).map(([key, label]) => (
               <button className={typeFilter === key ? 'active' : ''} key={key} onClick={() => setTypeFilter(key)} type="button">
                 {label}
@@ -2599,7 +2667,7 @@ function MediaView({ notes, overview, onOpenNote, onChanged }: {
             <EmptyState desc="换一个类型或下载状态试试。" icon="searchX" title="该筛选下没有资产" />
           ) : (
             <div className="me-grid" style={{ '--tile': `${tileSize}px` } as CSSProperties}>
-              {shown.map(({ note, asset }) => (
+              {progressiveShown.items.map(({ note, asset }) => (
                 <MediaTile
                   asset={asset}
                   isSelected={selected?.asset.id === asset.id}
@@ -2609,6 +2677,7 @@ function MediaView({ notes, overview, onOpenNote, onChanged }: {
                   overview={overview}
                 />
               ))}
+              <ProgressiveListTail shown={progressiveShown.visibleCount} total={shown.length} />
             </div>
           )}
         </div>
@@ -2634,16 +2703,20 @@ function MediaTile({ note, asset, isSelected, onClick, overview }: {
 }) {
   const dl = DL[asset.downloadStatus] || DL.not_downloaded;
   const isVideo = asset.mediaType === 'video';
+  const isFile = asset.mediaType === 'file';
   const src = mediaPreviewSrc(asset, overview);
+  const posterSrc = isVideo ? notePosterSource(note, overview) : null;
   return (
     <button className={`mtile ${isSelected ? 'selected' : ''}`} onClick={onClick} type="button">
       <div className="mtile-cover">
-        {src && asset.mediaType !== 'video' ? (
-          <img alt="" className="media-thumb-img" src={src} />
+        {src && (asset.mediaType === 'image' || asset.mediaType === 'cover') ? (
+          <img alt="" className="media-thumb-img" loading="lazy" referrerPolicy="no-referrer" src={src} />
+        ) : isVideo && posterSrc ? (
+          <img alt="" className="media-thumb-img" loading="lazy" referrerPolicy="no-referrer" src={posterSrc} />
         ) : src && asset.mediaType === 'video' ? (
-          <video className="media-thumb-img" muted playsInline preload="metadata" src={src} />
+          <video className="media-thumb-img" muted playsInline preload="none" src={src} />
         ) : (
-          <Cover durationMs={asset.durationMs} glyphSize={42} note={note} showPlay={isVideo} showType={false} type={isVideo ? 'video' : 'image'} />
+          <Cover durationMs={asset.durationMs} glyphSize={42} note={note} showPlay={isVideo} showType={false} type={isFile ? 'article' : isVideo ? 'video' : 'image'} />
         )}
         <span className="mtile-type">{MEDIA_TYPE_LABEL[asset.mediaType]}</span>
         <span className={`mtile-dl ${dl.cls}`} title={dl.label}>
@@ -2675,6 +2748,7 @@ function AssetInspector({ item, overview, onOpenNote, onDownloadAsset, isBusy }:
   const { note, asset } = item;
   const dl = DL[asset.downloadStatus] || DL.not_downloaded;
   const isVideo = asset.mediaType === 'video';
+  const isFile = asset.mediaType === 'file';
   const isDownloaded = asset.downloadStatus === 'downloaded';
   const isFailed = asset.downloadStatus === 'failed';
   const path = mediaAbsolutePath(asset, overview);
@@ -2694,7 +2768,12 @@ function AssetInspector({ item, overview, onOpenNote, onDownloadAsset, isBusy }:
     <aside className="me-insp">
       <div className="me-preview">
         <div className="media-preview-frame" style={previewStyle}>
-          {isDownloaded && src ? (
+          {isDownloaded && isFile ? (
+            <div className="me-preview-empty">
+              <Icon name="fileText" size={30} />
+              <span>文件已下载，可直接打开或在目录中查看</span>
+            </div>
+          ) : isDownloaded && src ? (
             isVideo ? (
               <video className="media-player" controls playsInline preload="metadata" src={src} />
             ) : (
@@ -2702,12 +2781,12 @@ function AssetInspector({ item, overview, onOpenNote, onDownloadAsset, isBusy }:
             )
           ) : isDownloaded ? (
             <div className="me-preview-empty">
-              <Icon name={isVideo ? 'video' : 'image'} size={30} />
+              <Icon name={isVideo ? 'video' : isFile ? 'fileText' : 'image'} size={30} />
               <span>本地文件已下载，当前环境无法生成预览地址</span>
             </div>
           ) : (
             <div className="me-preview-empty">
-              <Icon name={isFailed ? 'alert' : isVideo ? 'video' : 'image'} size={30} style={isFailed ? { color: 'var(--st-missing-fg)' } : null} />
+              <Icon name={isFailed ? 'alert' : isVideo ? 'video' : isFile ? 'fileText' : 'image'} size={30} style={isFailed ? { color: 'var(--st-missing-fg)' } : null} />
               <span>{isFailed ? '下载失败' : '本地未下载'}</span>
             </div>
           )}
@@ -2788,10 +2867,12 @@ function AssetInspector({ item, overview, onOpenNote, onDownloadAsset, isBusy }:
               <dd>{durationFmt(asset.durationMs) || '-'}</dd>
             </div>
           )}
-          <div>
-            <dt>比例</dt>
-            <dd>{mediaAspectLabel(asset)}</dd>
-          </div>
+          {!isFile && (
+            <div>
+              <dt>比例</dt>
+              <dd>{mediaAspectLabel(asset)}</dd>
+            </div>
+          )}
           <div>
             <dt>下载状态</dt>
             <dd className={isFailed ? 'text-missing' : isDownloaded ? 'text-ok' : ''}>{dl.label}</dd>
@@ -2804,6 +2885,169 @@ function AssetInspector({ item, overview, onOpenNote, onDownloadAsset, isBusy }:
         </div>
       </div>
     </aside>
+  );
+}
+
+type AiTaskName = 'classify_uncategorized' | 'split_category' | 'group_tags' | 'tag_governance';
+
+function clampProgress(value: number) {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+}
+
+function formatErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  return fallback;
+}
+
+function isAiCancelMessage(message: string) {
+  return message.includes('AI 任务已停止');
+}
+
+function makeAiProgress(task: AiTaskName, label: string, detail: string, planned: number): AiJobProgress {
+  return {
+    task,
+    phase: 'starting',
+    label,
+    detail,
+    planned: Math.max(0, planned),
+    scanned: 0,
+    updated: 0,
+    failed: 0,
+    skipped: 0,
+    progress: planned > 0 ? 2 : 100,
+    indeterminate: false,
+    error: null,
+  };
+}
+
+function AiProgressInline({ progress, fallback }: { progress: AiJobProgress | null; fallback: string }) {
+  const percent = clampProgress(progress?.progress ?? 2);
+  const indeterminate = Boolean(progress?.indeterminate);
+  const failed = progress?.phase === 'failed';
+  const stopping = progress?.phase === 'cancel_requested';
+  const stopped = progress?.phase === 'cancelled';
+  return (
+    <div className={`ai-run ${failed ? 'is-error' : stopping || stopped ? 'is-stopped' : ''}`}>
+      <div className="ai-running">
+        <Icon
+          name={failed ? 'alert' : stopping ? 'loader' : stopped ? 'x' : 'loader'}
+          size={14}
+          className={!failed && !stopped ? 'spin' : ''}
+        />
+        <span>{progress?.detail || fallback}</span>
+        {!indeterminate && <b>{failed ? '错误' : stopping ? '停止中' : stopped ? '已停止' : `${Math.round(percent)}%`}</b>}
+      </div>
+      <div
+        className={`prog-track ${indeterminate ? 'indeterminate' : ''}`}
+        role="progressbar"
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={indeterminate ? undefined : percent}
+      >
+        <div className="prog-fill" style={indeterminate ? undefined : { width: `${Math.max(4, percent)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function AiStopButton({
+  visible,
+  stopRequested,
+  onStop,
+}: {
+  visible: boolean;
+  stopRequested: boolean;
+  onStop: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <button className="btn btn-ghost btn-sm" disabled={stopRequested} onClick={onStop} type="button">
+      <Icon name={stopRequested ? 'loader' : 'x'} size={14} className={stopRequested ? 'spin' : ''} />
+      {stopRequested ? '正在停止' : '停止'}
+    </button>
+  );
+}
+
+function AiProgressFooter({
+  progress,
+  message,
+  error,
+  running,
+  onRetry,
+  onStop,
+  stopRequested = false,
+}: {
+  progress: AiJobProgress | null;
+  message: string;
+  error: string;
+  running: boolean;
+  onRetry?: () => void;
+  onStop?: () => void;
+  stopRequested?: boolean;
+}) {
+  const stopping = progress?.phase === 'cancel_requested';
+  const stopped = progress?.phase === 'cancelled';
+  const hasError = Boolean(error || progress?.error || progress?.phase === 'failed');
+  const detail = hasError ? (progress?.error || progress?.detail || error) : progress?.detail || message;
+  if (!progress && !detail && !running) return null;
+
+  const percent = clampProgress(progress?.progress ?? (running ? 2 : detail ? 100 : 0));
+  const complete = !hasError && !stopping && !stopped && (progress?.phase === 'completed' || (!running && Boolean(message)));
+  const indeterminate = Boolean(progress?.indeterminate && !complete && !hasError && !stopped);
+  const label = hasError ? (progress?.label || 'AI 任务失败') : progress?.label || (running ? 'AI 正在运行' : 'AI 任务完成');
+
+  return (
+    <div className="ai-form-status">
+      <div className={`ai-progress-card ${hasError ? 'is-error' : stopping || stopped ? 'is-stopped' : complete ? 'is-done' : ''}`}>
+        <div className="prog-head">
+          <strong>
+            <Icon
+              name={hasError ? 'alert' : stopping ? 'loader' : stopped ? 'x' : complete ? 'checkCircle' : 'loader'}
+              size={15}
+              className={!hasError && !complete && !stopped ? 'spin' : ''}
+            />
+            {label}
+          </strong>
+          <span>{hasError ? '错误' : stopping ? '停止中' : stopped ? '已停止' : indeterminate ? '读取中' : `${Math.round(percent)}%`}</span>
+        </div>
+        <div
+          className={`prog-track ${indeterminate ? 'indeterminate' : ''}`}
+          role="progressbar"
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={indeterminate ? undefined : percent}
+        >
+          <div className="prog-fill" style={indeterminate ? undefined : { width: `${Math.max(4, percent)}%` }} />
+        </div>
+        {detail && <p className="prog-detail">{detail}</p>}
+        {progress && (
+          <div className="ai-progress-stats">
+            <div><small>计划</small><strong>{progress.planned}</strong></div>
+            <div><small>已处理</small><strong>{progress.scanned}</strong></div>
+            <div><small>已更新</small><strong>{progress.updated}</strong></div>
+            <div><small>失败</small><strong>{progress.failed}</strong></div>
+            <div><small>跳过</small><strong>{progress.skipped}</strong></div>
+          </div>
+        )}
+        {((hasError && onRetry) || (running && onStop && !stopped)) && (
+          <div className="ai-progress-actions">
+            {running && onStop && !stopped && (
+              <button className="btn btn-ghost btn-sm" disabled={stopRequested} onClick={onStop} type="button">
+                <Icon name={stopRequested ? 'loader' : 'x'} size={14} className={stopRequested ? 'spin' : ''} />
+                {stopRequested ? '正在停止' : '停止'}
+              </button>
+            )}
+            {hasError && onRetry && (
+              <button className="btn btn-primary btn-sm" onClick={onRetry} type="button">
+                <Icon name="refresh" size={14} />
+                请重试
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2834,11 +3078,18 @@ function TagsView({
   const [isClassifying, setIsClassifying] = useState(false);
   const [isSplitting, setIsSplitting] = useState(false);
   const [isGroupingTags, setIsGroupingTags] = useState(false);
+  const [isGoverningTags, setIsGoverningTags] = useState(false);
+  const [isClearingTagGroups, setIsClearingTagGroups] = useState(false);
   const [aiMessage, setAiMessage] = useState('');
   const [aiError, setAiError] = useState('');
+  const [aiProgress, setAiProgress] = useState<AiJobProgress | null>(null);
+  const [aiStopRequested, setAiStopRequested] = useState(false);
   const [classifyResult, setClassifyResult] = useState<AiClassificationResult | null>(null);
   const [splitResult, setSplitResult] = useState<AiClassificationResult | null>(null);
-  const [tagGroupResult, setTagGroupResult] = useState<AiTagGroupResult | null>(null);
+  const [tagGovernanceResult, setTagGovernanceResult] = useState<TagGovernanceSuggestionResult | null>(null);
+  const [tagApplyResult, setTagApplyResult] = useState<TagGovernanceApplyResult | null>(null);
+  const [selectedRemoveTags, setSelectedRemoveTags] = useState<Set<string>>(() => new Set());
+  const [tagGroupFilter, setTagGroupFilter] = useState('all');
 
   const categories = useMemo(() => {
     const categoryMap = new Map<string, NoteSummary[]>();
@@ -2866,54 +3117,205 @@ function TagsView({
   }, [notes]);
 
   const tagSource = tags.length ? tags : fallbackTags;
+  const tagGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const tag of tagSource) {
+      const group = tag.groupName?.trim() || '未分组';
+      counts.set(group, (counts.get(group) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'));
+  }, [tagSource]);
   const normalizedTagQuery = tagQuery.trim().toLowerCase();
   const filteredTags = tagSource.filter((tag) => {
+    const matchesGroup = tagGroupFilter === 'all' || (tag.groupName?.trim() || '未分组') === tagGroupFilter;
+    if (!matchesGroup) return false;
     if (!normalizedTagQuery) return true;
-    return `${tag.name} ${tag.groupName ?? ''}`.toLowerCase().includes(normalizedTagQuery);
+    return tag.name.toLowerCase().includes(normalizedTagQuery);
   });
-  const groupedTags = useMemo(() => {
-    const map = new Map<string, TagSummary[]>();
-    for (const tag of filteredTags) {
-      const group = tag.groupName?.trim() || '未分组';
-      map.set(group, [...(map.get(group) ?? []), tag]);
-    }
-    return [...map.entries()].sort((a, b) => {
-      if (a[0] === '未分组') return 1;
-      if (b[0] === '未分组') return -1;
-      return b[1].reduce((sum, tag) => sum + tag.count, 0) - a[1].reduce((sum, tag) => sum + tag.count, 0);
-    });
-  }, [filteredTags]);
+  const groupedTagCount = tagSource.filter((tag) => Boolean(tag.groupName?.trim())).length;
 
   const maxTag = tagSource[0]?.count || 1;
   const uncategorizedCount = categories.find((category) => category.name === '未分类')?.n ?? 0;
   const aiReady = aiSettingsReady(aiSettings);
   const splitCategory = splitSource || categories.find((category) => category.name !== '未分类')?.name || categories[0]?.name || '';
   const splitCategoryCount = categories.find((category) => category.name === splitCategory)?.n ?? 0;
-  const groupedTagCount = groupedTags.filter(([group]) => group !== '未分组').length;
+  const isAiRunning = isClassifying || isSplitting || isGroupingTags || isGoverningTags;
+  const isTagActionBusy = isAiRunning || isClearingTagGroups;
+  const activeAiTask: AiTaskName | '' = isClassifying
+    ? 'classify_uncategorized'
+    : isSplitting
+      ? 'split_category'
+      : isGroupingTags
+        ? 'group_tags'
+        : isGoverningTags
+          ? 'tag_governance'
+          : '';
+  const visibleAiProgress = aiProgress && (!activeAiTask || aiProgress.task === activeAiTask) ? aiProgress : null;
+  const classifyProgress = aiProgress?.task === 'classify_uncategorized' ? aiProgress : null;
+  const splitProgress = aiProgress?.task === 'split_category' ? aiProgress : null;
+  const tagGovernanceProgress = aiProgress?.task === 'tag_governance' || aiProgress?.task === 'group_tags' ? aiProgress : null;
+  const classifyFailed = classifyProgress?.phase === 'failed';
+  const splitFailed = splitProgress?.phase === 'failed';
+  const tagGovernanceError = tagGovernanceProgress?.phase === 'failed' ? (tagGovernanceProgress.error || tagGovernanceProgress.detail || aiError) : '';
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    listen<AiJobProgress>('ai-job-progress', (event) => {
+      if (disposed) return;
+      setAiProgress(event.payload);
+      if (['completed', 'failed', 'cancelled'].includes(event.payload.phase)) {
+        setAiStopRequested(false);
+      }
+      if (event.payload.error || event.payload.phase === 'failed') {
+        setAiError(event.payload.error || event.payload.detail);
+      } else {
+        setAiError('');
+        setAiMessage(event.payload.detail);
+      }
+    })
+      .then((unlisten) => {
+        cleanup = unlisten;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, []);
+
+  function markAiFailed(task: AiTaskName, label: string, detail: string, planned: number) {
+    setAiProgress((current) => ({
+      task,
+      phase: 'failed',
+      label,
+      detail: current?.task === task && current.phase === 'failed' ? current.error || current.detail || detail : detail,
+      planned: current?.task === task ? current.planned : Math.max(0, planned),
+      scanned: current?.task === task ? current.scanned : 0,
+      updated: current?.task === task ? current.updated : 0,
+      failed: current?.task === task ? current.failed || 1 : 1,
+      skipped: current?.task === task ? current.skipped : 0,
+      progress: current?.task === task ? current.progress : 0,
+      indeterminate: false,
+      error: current?.task === task && current.phase === 'failed' ? current.error || current.detail || detail : detail,
+    }));
+  }
+
+  function markAiCancelled(task: AiTaskName, label: string, detail: string, planned: number) {
+    setAiError('');
+    setAiMessage(detail);
+    setAiProgress((current) => ({
+      task,
+      phase: 'cancelled',
+      label,
+      detail,
+      planned: current?.task === task ? current.planned : Math.max(0, planned),
+      scanned: current?.task === task ? current.scanned : 0,
+      updated: current?.task === task ? current.updated : 0,
+      failed: current?.task === task ? current.failed : 0,
+      skipped: current?.task === task ? current.skipped : 0,
+      progress: current?.task === task ? current.progress : 0,
+      indeterminate: false,
+      error: null,
+    }));
+  }
+
+  async function stopAiTask() {
+    if (!isAiRunning || !activeAiTask || aiStopRequested) return;
+    const task = activeAiTask;
+    setAiStopRequested(true);
+    setAiError('');
+    setAiMessage('正在停止 AI 任务...');
+    setAiProgress((current) => ({
+      task,
+      phase: 'cancel_requested',
+      label: current?.task === task ? current.label : '正在停止 AI 任务',
+      detail: '已请求停止，当前 AI 请求返回后会停止写入。',
+      planned: current?.task === task ? current.planned : 0,
+      scanned: current?.task === task ? current.scanned : 0,
+      updated: current?.task === task ? current.updated : 0,
+      failed: current?.task === task ? current.failed : 0,
+      skipped: current?.task === task ? current.skipped : 0,
+      progress: current?.task === task ? current.progress : 0,
+      indeterminate: false,
+      error: null,
+    }));
+    try {
+      await libraryApi.cancelAiTask(task);
+    } catch (error) {
+      setAiStopRequested(false);
+      setAiError(formatErrorMessage(error, '停止 AI 任务失败'));
+    }
+  }
+
+  function retryFailedAiTask() {
+    if (!aiProgress || aiProgress.phase !== 'failed' || isAiRunning) return;
+    if (aiProgress.task === 'classify_uncategorized') {
+      void runAiClassify();
+    } else if (aiProgress.task === 'split_category') {
+      void runAiSplit();
+    } else if (aiProgress.task === 'group_tags') {
+      void runAiGroupTags();
+    } else if (aiProgress.task === 'tag_governance') {
+      void runTagGovernance();
+    }
+  }
 
   async function runAiClassify() {
+    if (isAiRunning) return;
+    const planned = Math.min(classifyLimit, Math.max(1, uncategorizedCount));
     setIsClassifying(true);
+    setAiStopRequested(false);
     setAiError('');
     setAiMessage('');
     setClassifyResult(null);
+    setAiProgress(makeAiProgress('classify_uncategorized', 'AI 自动分类', '正在启动 AI 自动分类。', planned));
     setAiMessage('AI 正在整理未分类收藏...');
     try {
       const result = await libraryApi.aiClassifyUncategorized({ limit: classifyLimit });
       setClassifyResult(result);
       setAiMessage(result.message);
+      setAiProgress({
+        task: 'classify_uncategorized',
+        phase: 'completed',
+        label: 'AI 自动分类完成',
+        detail: result.message,
+        planned: result.scanned,
+        scanned: result.scanned,
+        updated: result.updated,
+        failed: 0,
+        skipped: Math.max(0, result.scanned - result.updated),
+        progress: 100,
+        indeterminate: false,
+        error: null,
+      });
       await onChanged(result.message);
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : 'AI 自动分类失败');
+      const detail = formatErrorMessage(error, 'AI 自动分类失败');
+      if (isAiCancelMessage(detail)) {
+        markAiCancelled('classify_uncategorized', 'AI 自动分类已停止', detail, planned);
+        await onChanged(detail);
+      } else {
+        setAiError(detail);
+        markAiFailed('classify_uncategorized', 'AI 自动分类失败', detail, planned);
+      }
     } finally {
       setIsClassifying(false);
+      setAiStopRequested(false);
     }
   }
 
   async function runAiSplit() {
+    if (isAiRunning) return;
+    const planned = Math.min(classifyLimit, Math.max(1, splitCategoryCount || 1));
     setIsSplitting(true);
+    setAiStopRequested(false);
     setAiError('');
     setAiMessage('');
     setSplitResult(null);
+    setAiProgress(makeAiProgress('split_category', '拆分当前分类', '正在启动分类筛选。', planned));
     setAiMessage('AI 正在筛选分类...');
     try {
       const result = await libraryApi.aiSplitCategory({
@@ -2924,31 +3326,240 @@ function TagsView({
       });
       setSplitResult(result);
       setAiMessage(result.message);
+      setAiProgress({
+        task: 'split_category',
+        phase: 'completed',
+        label: '拆分分类完成',
+        detail: result.message,
+        planned: result.scanned,
+        scanned: result.scanned,
+        updated: result.updated,
+        failed: 0,
+        skipped: Math.max(0, result.scanned - result.updated),
+        progress: 100,
+        indeterminate: false,
+        error: null,
+      });
       setSplitTarget('');
       setSplitRule('');
       await onChanged(result.message);
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : 'AI 分类筛选失败');
+      const detail = formatErrorMessage(error, 'AI 分类筛选失败');
+      if (isAiCancelMessage(detail)) {
+        markAiCancelled('split_category', '拆分分类已停止', detail, planned);
+        await onChanged(detail);
+      } else {
+        setAiError(detail);
+        markAiFailed('split_category', '拆分分类失败', detail, planned);
+      }
     } finally {
       setIsSplitting(false);
+      setAiStopRequested(false);
     }
   }
 
   async function runAiGroupTags() {
+    if (isTagActionBusy) return;
+    const planned = Math.max(1, tagSource.length);
     setIsGroupingTags(true);
+    setAiStopRequested(false);
     setAiError('');
     setAiMessage('');
-    setTagGroupResult(null);
-    setAiMessage('AI 正在整理标签...');
+    setTagApplyResult(null);
+    setAiProgress(makeAiProgress('group_tags', 'AI 分类标签', '正在启动标签分类。', planned));
     try {
-      const result = await libraryApi.aiGroupTags({ limit: Math.max(80, Math.min(500, tagSource.length || 260)) });
-      setTagGroupResult(result);
+      const result = await libraryApi.aiGroupTags({ limit: Math.min(800, Math.max(1, tagSource.length)) });
       setAiMessage(result.message);
+      setAiProgress({
+        task: 'group_tags',
+        phase: 'completed',
+        label: '标签分类完成',
+        detail: result.message,
+        planned: result.scanned,
+        scanned: result.scanned,
+        updated: result.updated,
+        failed: 0,
+        skipped: Math.max(0, result.scanned - result.updated),
+        progress: 100,
+        indeterminate: false,
+        error: null,
+      });
       await onChanged(result.message);
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : 'AI 标签整理失败');
+      const detail = formatErrorMessage(error, 'AI 标签分类失败');
+      if (isAiCancelMessage(detail)) {
+        markAiCancelled('group_tags', 'AI 标签分类已停止', detail, planned);
+        await onChanged(detail);
+      } else {
+        setAiError(detail);
+        markAiFailed('group_tags', 'AI 标签分类失败', detail, planned);
+      }
     } finally {
       setIsGroupingTags(false);
+      setAiStopRequested(false);
+    }
+  }
+
+  async function runTagGovernance() {
+    if (isTagActionBusy) return;
+    const planned = Math.max(1, tagSource.length);
+    setIsGoverningTags(true);
+    setAiStopRequested(false);
+    setAiError('');
+    setAiMessage('');
+    setTagApplyResult(null);
+    setAiProgress(makeAiProgress('tag_governance', '扫描标签问题', '正在扫描无效标签。', planned));
+    try {
+      const result = await libraryApi.aiSuggestTagMerges({
+        limit: Math.min(800, Math.max(1, tagSource.length)),
+        useAi: false,
+        minConfidence: 0.72,
+      });
+      setTagGovernanceResult(result);
+      setAiMessage(result.message);
+      setAiProgress({
+        task: 'tag_governance',
+        phase: 'completed',
+        label: '标签治理扫描完成',
+        detail: `发现 ${result.cleanupIssues.length} 个待清理标签。`,
+        planned: result.scanned,
+        scanned: result.scanned,
+        updated: 0,
+        failed: 0,
+        skipped: result.cleanupIssues.length,
+        progress: 100,
+        indeterminate: false,
+        error: null,
+      });
+      setSelectedRemoveTags(new Set(result.cleanupIssues.map((issue) => issue.tag)));
+    } catch (error) {
+      const detail = formatErrorMessage(error, '标签治理失败');
+      if (isAiCancelMessage(detail)) {
+        markAiCancelled('tag_governance', '标签治理已停止', detail, planned);
+      } else {
+        setAiError(detail);
+        markAiFailed('tag_governance', '标签治理失败', detail, planned);
+      }
+    } finally {
+      setIsGoverningTags(false);
+      setAiStopRequested(false);
+    }
+  }
+
+  async function applyTagGovernance() {
+    if (isTagActionBusy) return;
+    if (!tagGovernanceResult) return;
+    const removeTags = tagGovernanceResult.cleanupIssues
+      .filter((issue) => selectedRemoveTags.has(issue.tag))
+      .map((issue) => issue.tag);
+    if (removeTags.length === 0) {
+      setAiError('请先选择要清理的标签。');
+      return;
+    }
+    const ok = window.confirm(`将清理 ${removeTags.length} 个无效标签。不会删除收藏内容，继续吗？`);
+    if (!ok) return;
+    setIsGoverningTags(true);
+    setAiStopRequested(false);
+    setAiError('');
+    setAiMessage('');
+    setAiProgress(makeAiProgress('tag_governance', '应用标签治理', '正在清理无效标签。', removeTags.length));
+    try {
+      const result = await libraryApi.applyTagGovernance({ removeTags, mergeGroups: [] });
+      setTagApplyResult(result);
+      setAiMessage(result.message);
+      setAiProgress({
+        task: 'tag_governance',
+        phase: 'completed',
+        label: '标签治理完成',
+        detail: result.message,
+        planned: removeTags.length,
+        scanned: removeTags.length,
+        updated: result.removedTags + result.mergedTags,
+        failed: 0,
+        skipped: 0,
+        progress: 100,
+        indeterminate: false,
+        error: null,
+      });
+      setSelectedRemoveTags(new Set());
+      await onChanged(result.message);
+      setTagGovernanceResult(null);
+    } catch (error) {
+      const detail = formatErrorMessage(error, '应用标签治理失败');
+      if (isAiCancelMessage(detail)) {
+        markAiCancelled('tag_governance', '标签治理已停止', detail, removeTags.length);
+      } else {
+        setAiError(detail);
+        markAiFailed('tag_governance', '应用标签治理失败', detail, removeTags.length);
+      }
+    } finally {
+      setIsGoverningTags(false);
+      setAiStopRequested(false);
+    }
+  }
+
+  function toggleRemoveTag(tag: string) {
+    setSelectedRemoveTags((current) => {
+      const next = new Set(current);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }
+
+  async function clearTagGroups() {
+    if (isTagActionBusy) return;
+    if (groupedTagCount === 0) {
+      setAiError('');
+      setAiMessage('当前没有标签分类需要清空。');
+      return;
+    }
+    if (!window.confirm(`清空当前 ${groupedTagCount} 个标签分类归属？标签和收藏内容会保留。`)) {
+      return;
+    }
+    setIsClearingTagGroups(true);
+    setAiError('');
+    setAiMessage('正在清空标签分类...');
+    setTagGovernanceResult(null);
+    setTagApplyResult(null);
+    try {
+      const result = await libraryApi.clearAiTagGroups();
+      setAiMessage(result.message);
+      setAiProgress({
+        task: 'group_tags',
+        phase: 'completed',
+        label: '标签分类已清空',
+        detail: result.message,
+        planned: result.scanned,
+        scanned: result.scanned,
+        updated: result.cleared,
+        failed: 0,
+        skipped: Math.max(0, result.scanned - result.cleared),
+        progress: 100,
+        indeterminate: false,
+        error: null,
+      });
+      setTagGroupFilter('all');
+      await onChanged(result.message);
+    } catch (error) {
+      const detail = formatErrorMessage(error, '清空标签分类失败');
+      setAiError(detail);
+      setAiProgress({
+        task: 'group_tags',
+        phase: 'failed',
+        label: '清空标签分类失败',
+        detail,
+        planned: groupedTagCount,
+        scanned: 0,
+        updated: 0,
+        failed: 1,
+        skipped: 0,
+        progress: 0,
+        indeterminate: false,
+        error: detail,
+      });
+    } finally {
+      setIsClearingTagGroups(false);
     }
   }
 
@@ -2961,7 +3572,7 @@ function TagsView({
           </span>
           <div className="ai-head-text">
             <h2>AI 分类整理</h2>
-            <p>用 AI 把堆在一起的收藏整理成可处理的清单：归类、拆分、整理标签组。</p>
+            <p>用 AI 把堆在一起的收藏整理成可处理的清单：归类、拆分分类。</p>
           </div>
           {aiReady ? (
             <div className="ai-status ready" title={`${aiSettings?.model} @ ${hostOf(aiSettings?.baseUrl)}`}>
@@ -2988,7 +3599,7 @@ function TagsView({
               <Icon name="cpu" size={30} stroke={1.7} />
             </div>
             <h3>先配置 AI 才能自动整理</h3>
-            <p>在「设置 · AI 自动整理」里选择服务商、填入 Base URL、模型和 API Key，保存后这里就能一键归类、拆分分类与整理标签组。</p>
+            <p>在「设置 · AI 自动整理」里选择服务商、填入 Base URL、模型和 API Key，保存后这里就能一键归类与拆分分类。</p>
             <button className="btn btn-primary" onClick={onOpenSettings} type="button">
               <Icon name="settings" size={16} />
               前往 AI 设置
@@ -3026,7 +3637,7 @@ function TagsView({
                       <span>本次处理数量</span>
                       <input
                         className="text-input ai-input"
-                        disabled={isClassifying}
+                        disabled={isAiRunning}
                         max={Math.max(1, uncategorizedCount)}
                         min={1}
                         onChange={(event) => setClassifyLimit(Math.max(1, Math.min(uncategorizedCount || 1, Number(event.target.value) || 120)))}
@@ -3034,22 +3645,24 @@ function TagsView({
                         value={Math.min(classifyLimit, Math.max(1, uncategorizedCount))}
                       />
                     </label>
-                    <button className="btn btn-primary" disabled={isClassifying} onClick={() => void runAiClassify()} type="button">
+                    <button className="btn btn-primary" disabled={isAiRunning} onClick={() => void runAiClassify()} type="button">
                       <Icon name={isClassifying ? 'loader' : 'sparkles'} size={15} className={isClassifying ? 'spin' : ''} />
                       {isClassifying ? '分类中...' : 'AI 自动分类'}
                     </button>
+                    <AiStopButton visible={isClassifying} stopRequested={aiStopRequested} onStop={() => void stopAiTask()} />
                   </>
                 )}
 
-                {isClassifying && (
-                  <div className="ai-run">
-                    <div className="ai-running">
-                      <Icon name="loader" size={14} className="spin" />
-                      <span>正在运行，请勿重复点击...</span>
-                    </div>
-                    <div className="prog-track indeterminate">
-                      <div className="prog-fill" />
-                    </div>
+                {(isClassifying || classifyFailed) && <AiProgressInline progress={classifyProgress} fallback="正在运行，请勿重复点击..." />}
+                {classifyFailed && !isClassifying && (
+                  <div className="ai-partial ai-error-inline">
+                    <Icon name="alert" size={13} />
+                    <span>
+                      {(classifyProgress?.updated ?? 0) > 0
+                        ? `已保存 ${classifyProgress?.updated ?? 0} 条成功结果，未分类数量已刷新；剩余内容可以降低数量后重试。`
+                        : '本次没有写入成功结果，可以降低数量或换更稳定的模型后重试。'}
+                    </span>
+                    <button className="btn-quiet btn-sm ai-retry" disabled={isAiRunning} onClick={() => void runAiClassify()} type="button">重试</button>
                   </div>
                 )}
                 {classifyResult && !isClassifying && (
@@ -3064,7 +3677,7 @@ function TagsView({
                       <div className="ai-partial">
                         <Icon name="alert" size={13} />
                         <span>已应用高置信度结果，其余条目保留原状态，可稍后重试。</span>
-                        <button className="btn-quiet btn-sm ai-retry" onClick={() => void runAiClassify()} type="button">重试</button>
+                        <button className="btn-quiet btn-sm ai-retry" disabled={isAiRunning} onClick={() => void runAiClassify()} type="button">重试</button>
                       </div>
                     )}
                   </div>
@@ -3092,7 +3705,7 @@ function TagsView({
                     <div className="ai-split-row">
                       <label className="ai-field">
                         <span>来源分类</span>
-                        <select className="text-input ai-input" disabled={isSplitting} onChange={(event) => setSplitSource(event.target.value)} value={splitCategory}>
+                        <select className="text-input ai-input" disabled={isAiRunning} onChange={(event) => setSplitSource(event.target.value)} value={splitCategory}>
                           {categories.filter((category) => category.name !== '未分类').map((category) => (
                             <option key={category.name} value={category.name}>{category.name}（{category.n}）</option>
                           ))}
@@ -3105,7 +3718,7 @@ function TagsView({
                         <span>目标分类</span>
                         <input
                           className="text-input ai-input"
-                          disabled={isSplitting}
+                          disabled={isAiRunning}
                           onChange={(event) => setSplitTarget(event.target.value)}
                           placeholder="如：强化学习"
                           value={splitTarget}
@@ -3116,7 +3729,7 @@ function TagsView({
                       <span>筛选条件（自然语言）</span>
                       <textarea
                         className="cookie-field ai-textarea"
-                        disabled={isSplitting}
+                        disabled={isAiRunning}
                         onChange={(event) => setSplitRule(event.target.value)}
                         placeholder="如：筛出讲强化学习 / RLHF / PPO 的笔记"
                         spellCheck={false}
@@ -3127,7 +3740,7 @@ function TagsView({
                       <span>本次处理数量（来源约 {splitCategoryCount} 条）</span>
                       <input
                         className="text-input ai-input"
-                        disabled={isSplitting}
+                        disabled={isAiRunning}
                         max={Math.max(1, splitCategoryCount)}
                         min={1}
                         onChange={(event) => setClassifyLimit(Math.max(1, Math.min(splitCategoryCount || 1, Number(event.target.value) || 60)))}
@@ -3137,25 +3750,27 @@ function TagsView({
                     </label>
                     <button
                       className="btn btn-primary"
-                      disabled={isSplitting || !splitCategory || !splitTarget.trim()}
+                      disabled={isAiRunning || !splitCategory || !splitTarget.trim()}
                       onClick={() => void runAiSplit()}
                       type="button"
                     >
                       <Icon name={isSplitting ? 'loader' : 'scissors'} size={15} className={isSplitting ? 'spin' : ''} />
                       {isSplitting ? '拆分中...' : '拆分当前分类'}
                     </button>
+                    <AiStopButton visible={isSplitting} stopRequested={aiStopRequested} onStop={() => void stopAiTask()} />
                   </>
                 )}
 
-                {isSplitting && (
-                  <div className="ai-run">
-                    <div className="ai-running">
-                      <Icon name="loader" size={14} className="spin" />
-                      <span>正在筛选分类...</span>
-                    </div>
-                    <div className="prog-track indeterminate">
-                      <div className="prog-fill" />
-                    </div>
+                {(isSplitting || splitFailed) && <AiProgressInline progress={splitProgress} fallback="正在筛选分类..." />}
+                {splitFailed && !isSplitting && (
+                  <div className="ai-partial ai-error-inline">
+                    <Icon name="alert" size={13} />
+                    <span>
+                      {(splitProgress?.updated ?? 0) > 0
+                        ? `已保存 ${splitProgress?.updated ?? 0} 条命中结果，分类数量已刷新；剩余内容可以稍后重试。`
+                        : '本次没有写入命中结果，可以调整筛选条件或降低数量后重试。'}
+                    </span>
+                    <button className="btn-quiet btn-sm ai-retry" disabled={isAiRunning || !splitTarget.trim()} onClick={() => void runAiSplit()} type="button">重试</button>
                   </div>
                 )}
                 {splitResult && !isSplitting && (
@@ -3170,75 +3785,107 @@ function TagsView({
                 )}
               </div>
 
-              <div className="ai-task">
-                <div className="ai-task-head">
-                  <span className="ai-task-ico tone-group">
-                    <Icon name="tags" size={16} />
-                  </span>
-                  <div>
-                    <h4>整理标签组</h4>
-                    <p>让 AI 根据现有标签生成或更新标签分组。</p>
+              <div className="ai-task tag-governance-task">
+                <div className="tag-gov-overview">
+                  <div className="ai-task-head">
+                    <span className="ai-task-ico tone-governance">
+                      <Icon name="tags" size={16} />
+                    </span>
+                    <div>
+                      <h4>标签归属</h4>
+                      <p>按当前收藏大分类给标签归属，顺手清理无效标签。</p>
+                    </div>
                   </div>
+
+                  <div className="ai-result-grid c3">
+                    <div><small>标签总数</small><strong>{tagSource.length}</strong></div>
+                    <div className="hl"><small>已归属</small><strong>{groupedTagCount}</strong></div>
+                    <div><small>待清理</small><strong>{tagGovernanceResult?.cleanupIssues.length ?? '-'}</strong></div>
+                  </div>
+
+                  <div className="tag-gov-actions">
+                    <button className="btn btn-ghost btn-sm" disabled={isTagActionBusy} onClick={() => void runTagGovernance()} type="button">
+                      <Icon name={isGoverningTags ? 'loader' : 'scan'} size={14} className={isGoverningTags ? 'spin' : ''} />
+                      扫描问题
+                    </button>
+                    <button className="btn btn-primary btn-sm" disabled={!aiReady || isTagActionBusy} onClick={() => void runAiGroupTags()} type="button">
+                      <Icon name={isGroupingTags ? 'loader' : 'folder'} size={14} className={isGroupingTags ? 'spin' : ''} />
+                      AI 分类标签
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={isTagActionBusy || groupedTagCount === 0} onClick={() => void clearTagGroups()} type="button">
+                      <Icon name={isClearingTagGroups ? 'loader' : 'trash'} size={14} className={isClearingTagGroups ? 'spin' : ''} />
+                      清空标签分类
+                    </button>
+                    <AiStopButton visible={isGroupingTags || isGoverningTags} stopRequested={aiStopRequested} onStop={() => void stopAiTask()} />
+                  </div>
+
+                  {tagGovernanceError && (
+                    <div className="tag-gov-error">
+                      <Icon name="alert" size={14} />
+                      <span>{tagGovernanceError}</span>
+                    </div>
+                  )}
+
+                  {tagApplyResult && !isGoverningTags && (
+                    <div className="ai-run">
+                      <div className="ai-result-grid c3">
+                        <div><small>已清理</small><strong>{tagApplyResult.removedTags}</strong></div>
+                        <div className="hl"><small>影响笔记</small><strong>{tagApplyResult.affectedNotes}</strong></div>
+                        <div><small>状态</small><strong>完成</strong></div>
+                      </div>
+                    </div>
+                  )}
+
+                  {(isGoverningTags || isGroupingTags || isClearingTagGroups) && <AiProgressInline progress={tagGovernanceProgress} fallback={isClearingTagGroups ? '正在清空标签分类...' : '正在整理标签...'} />}
                 </div>
 
-                {tagSource.length === 0 ? (
-                  <div className="ai-task-empty">
-                    <Icon name="tag" size={20} />
-                    <span>还没有标签可以整理。</span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="ai-stat-row">
-                      <div className="ai-stat">
-                        <span className="ai-stat-ico"><Icon name="tag" size={15} /></span>
-                        <span className="v">{tagSource.length}</span>
-                        <span className="l">个标签</span>
+                {tagGovernanceResult && (
+                  <div className="tag-gov-panel">
+                    {tagGovernanceResult.cleanupIssues.length > 0 && (
+                      <div className="tag-gov-block">
+                        <div className="tag-gov-block-head">
+                          <strong>清洗</strong>
+                          <span>{selectedRemoveTags.size} / {tagGovernanceResult.cleanupIssues.length}</span>
+                        </div>
+                        <div className="tag-gov-list compact">
+                          {tagGovernanceResult.cleanupIssues.slice(0, 12).map((issue) => (
+                            <label className="tag-gov-row" key={issue.tag}>
+                              <input checked={selectedRemoveTags.has(issue.tag)} disabled={isTagActionBusy} onChange={() => toggleRemoveTag(issue.tag)} type="checkbox" />
+                              <span className="tag-gov-name">{issue.tag}</span>
+                              <span className="tag-gov-count">{issue.count}</span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
-                      <div className="ai-stat">
-                        <span className="ai-stat-ico"><Icon name="layers" size={15} /></span>
-                        <span className="v">{groupedTagCount}</span>
-                        <span className="l">个标签组</span>
-                      </div>
-                    </div>
-                    <p className="ai-hint">把相近标签收拢成「主题 / 场景 / 状态」等分组，方便在收藏库里成组筛选。</p>
-                    <button className="btn btn-primary" disabled={isGroupingTags} onClick={() => void runAiGroupTags()} type="button">
-                      <Icon name={isGroupingTags ? 'loader' : 'sparkles'} size={15} className={isGroupingTags ? 'spin' : ''} />
-                      {isGroupingTags ? '整理中...' : '整理标签组'}
+                    )}
+
+                    <button className="btn btn-primary" disabled={isTagActionBusy || selectedRemoveTags.size === 0} onClick={() => void applyTagGovernance()} type="button">
+                      <Icon name={isGoverningTags ? 'loader' : 'check'} size={15} className={isGoverningTags ? 'spin' : ''} />
+                      应用选中治理
                     </button>
-                  </>
+                  </div>
                 )}
 
-                {isGroupingTags && (
-                  <div className="ai-run">
-                    <div className="ai-running">
-                      <Icon name="loader" size={14} className="spin" />
-                      <span>正在整理标签...</span>
-                    </div>
-                    <div className="prog-track indeterminate">
-                      <div className="prog-fill" />
-                    </div>
-                  </div>
-                )}
-                {tagGroupResult && !isGroupingTags && (
-                  <div className="ai-run">
-                    <div className="ai-result-grid c3">
-                      <div className="hl"><small>生成/更新标签组</small><strong>{tagGroupResult.groups.length}</strong></div>
-                      <div><small>影响标签</small><strong>{tagGroupResult.updated}</strong></div>
-                      <div><small>已扫描</small><strong>{tagGroupResult.scanned}</strong></div>
-                    </div>
+                {!tagGovernanceResult && !tagApplyResult && !tagGovernanceError && !isGoverningTags && !isGroupingTags && !isClearingTagGroups && (
+                  <div className="tag-gov-empty">
+                    <Icon name="tags" size={20} />
+                    <strong>按分类整理标签</strong>
+                    <span>AI 分类标签会用当前收藏分类作为标签归属；扫描问题只负责清理无效标签。</span>
                   </div>
                 )}
               </div>
+
             </div>
 
-            {(aiMessage || aiError) && (
-              <div className="ai-form-status">
-                <div className={`note-banner ${aiError ? 'warn' : 'ok'}`}>
-                  <Icon name={aiError ? 'alert' : 'checkCircle'} size={15} />
-                  <div>{aiError || aiMessage}</div>
-                </div>
-              </div>
-            )}
+            <AiProgressFooter
+              progress={visibleAiProgress}
+              message={aiMessage}
+              error={aiError}
+              running={isAiRunning}
+              onRetry={visibleAiProgress?.phase === 'failed' && !isAiRunning ? retryFailedAiTask : undefined}
+              onStop={isAiRunning ? () => void stopAiTask() : undefined}
+              stopRequested={aiStopRequested}
+            />
           </>
         )}
       </section>
@@ -3282,34 +3929,40 @@ function TagsView({
       <div className="tag-cloud-sec">
         <h2>
           <Icon name="tag" size={16} />
-          全部标签 <span className="count">{tagSource.length} 个 · 点击在收藏库里筛选</span>
+          全部标签 <span className="count">{filteredTags.length} / {tagSource.length} 个 · 点击在收藏库里筛选</span>
           <label className="tag-search">
             <Icon name="search" size={14} />
-            <input onChange={(event) => setTagQuery(event.target.value)} placeholder="搜索标签或标签组" value={tagQuery} />
+            <input onChange={(event) => setTagQuery(event.target.value)} placeholder="搜索标签" value={tagQuery} />
           </label>
         </h2>
-        {groupedTags.map(([group, groupTags]) => (
-          <div className="tag-group" key={group}>
-            <div className="tag-group-head">
-              <strong>{group}</strong>
-              <span>{groupTags.length} 个标签</span>
-            </div>
-            <div className="tag-cloud">
-              {groupTags.map((tag) => (
-                <button
-                  className={`chip tag ${tag.count >= maxTag && tag.count > 0 ? 'hot' : ''}`}
-                  key={tag.name}
-                  onClick={() => onTagClick(tag.name)}
-                  type="button"
-                >
-                  <Icon name="tag" size={13} />
-                  {tag.name}
-                  <span className="tc-count">{tag.count}</span>
-                </button>
-              ))}
-            </div>
+        {tagGroups.length > 0 && (
+          <div className="tag-group-filter">
+            <button className={tagGroupFilter === 'all' ? 'on' : ''} onClick={() => setTagGroupFilter('all')} type="button">
+              全部
+              <span>{tagSource.length}</span>
+            </button>
+            {tagGroups.map(([group, count]) => (
+              <button className={tagGroupFilter === group ? 'on' : ''} key={group} onClick={() => setTagGroupFilter(group)} type="button">
+                {group}
+                <span>{count}</span>
+              </button>
+            ))}
           </div>
-        ))}
+        )}
+        <div className="tag-cloud">
+          {filteredTags.map((tag) => (
+            <button
+              className={`chip tag ${tag.count >= maxTag && tag.count > 0 ? 'hot' : ''}`}
+              key={tag.name}
+              onClick={() => onTagClick(tag.name)}
+              type="button"
+            >
+              <Icon name="tag" size={13} />
+              {tag.name}
+              <span className="tc-count">{tag.count}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -3349,6 +4002,10 @@ function ExportView({ notes, overview }: { notes: NoteSummary[]; overview: Libra
   const [exportMessage, setExportMessage] = useState('');
   const [exportError, setExportError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [backupPath, setBackupPath] = useState('');
+  const [backupMessage, setBackupMessage] = useState('');
+  const [backupError, setBackupError] = useState('');
+  const [backingUp, setBackingUp] = useState(false);
   const formats: Array<{ key: typeof format; label: string; desc: string }> = [
     { key: 'json', label: 'JSON', desc: '完整结构化数据，适合迁移和二次开发' },
     { key: 'csv', label: 'CSV', desc: '表格视图，适合在表格软件里整理' },
@@ -3375,6 +4032,22 @@ function ExportView({ notes, overview }: { notes: NoteSummary[]; overview: Libra
       setExportError(error instanceof Error ? error.message : '导出失败。');
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function runBackup() {
+    setBackingUp(true);
+    setBackupPath('');
+    setBackupMessage('');
+    setBackupError('');
+    try {
+      const result = await libraryApi.createLibraryBackup();
+      setBackupPath(result.path);
+      setBackupMessage(`${result.message} 共 ${result.fileCount} 个文件，${fileSize(result.sizeBytes)}。`);
+    } catch (error) {
+      setBackupError(error instanceof Error ? error.message : '生成备份失败。');
+    } finally {
+      setBackingUp(false);
     }
   }
 
@@ -3520,11 +4193,35 @@ function ExportView({ notes, overview }: { notes: NoteSummary[]; overview: Libra
                 <strong>整库备份</strong>
                 <span>打包数据库与媒体为一个 .zip，便于迁移到新设备</span>
               </div>
-              <button className="btn btn-ghost btn-sm disabled-looking" type="button">
-                <Icon name="download" size={15} />
-                备份待接入
+              <button className="btn btn-primary btn-sm" disabled={backingUp} onClick={() => void runBackup()} type="button">
+                <Icon name={backingUp ? 'loader' : 'download'} size={15} className={backingUp ? 'spin' : ''} />
+                {backingUp ? '打包中' : '生成备份 Zip'}
               </button>
             </div>
+            {(backupMessage || backupError) && (
+              <div className={`note-banner ${backupError ? 'warn' : 'ok'} log-status`}>
+                <Icon name={backupError ? 'alert' : 'checkCircle'} size={15} />
+                <div>
+                  <strong>{backupError ? '备份失败' : '备份完成'}</strong>
+                  {backupError || backupMessage}
+                </div>
+              </div>
+            )}
+            {backupPath && (
+              <div className="export-path fade-in">
+                <span className="mono">{backupPath}</span>
+                <div>
+                  <button className="btn btn-quiet btn-sm" onClick={() => void openLocalPath(backupPath)} type="button">
+                    <Icon name="fileText" size={15} />
+                    打开
+                  </button>
+                  <button className="btn btn-quiet btn-sm" onClick={() => void openLocalPath(backupPath, true)} type="button">
+                    <Icon name="folder" size={15} />
+                    显示
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -3592,6 +4289,17 @@ function SettingsView({
   const [aiConfigMessage, setAiConfigMessage] = useState('');
   const [aiConfigError, setAiConfigError] = useState('');
   const [showAiKey, setShowAiKey] = useState(false);
+  const [promptSettings, setPromptSettings] = useState<AiPromptSettings | null>(null);
+  const [promptDrafts, setPromptDrafts] = useState<AiPromptEditorItem[]>([]);
+  const [activePromptKey, setActivePromptKey] = useState('classify_uncategorized');
+  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
+  const [isSavingPrompts, setIsSavingPrompts] = useState(false);
+  const [promptMessage, setPromptMessage] = useState('');
+  const [promptError, setPromptError] = useState('');
+  const [logInfo, setLogInfo] = useState<LogFileInfo | null>(null);
+  const [logMessage, setLogMessage] = useState('');
+  const [logError, setLogError] = useState('');
+  const [isClearingLogs, setIsClearingLogs] = useState(false);
   const standardAiPresets = AI_PRESETS.filter((preset) => !preset.custom);
   const customAiPreset = AI_PRESETS.find((preset) => preset.custom) ?? AI_PRESETS[AI_PRESETS.length - 1];
   const activeAiPreset = standardAiPresets.find(
@@ -3611,6 +4319,42 @@ function SettingsView({
     }));
   }, [aiSettings?.baseUrl, aiSettings?.model, aiSettings?.provider, aiSettings?.temperature, aiSettings?.maxTokens]);
 
+  useEffect(() => {
+    let disposed = false;
+    setIsLoadingPrompts(true);
+    libraryApi.loadAiPromptSettings()
+      .then((settings) => {
+        if (disposed) return;
+        setPromptSettings(settings);
+        setPromptDrafts(settings.prompts);
+        setActivePromptKey((current) => settings.prompts.some((prompt) => prompt.key === current) ? current : settings.prompts[0]?.key ?? 'classify_uncategorized');
+        setPromptError(settings.validationError ?? '');
+      })
+      .catch((error) => {
+        if (!disposed) setPromptError(error instanceof Error ? error.message : '读取 AI Prompt 失败');
+      })
+      .finally(() => {
+        if (!disposed) setIsLoadingPrompts(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    libraryApi.getLogFileInfo()
+      .then((info) => {
+        if (!disposed) setLogInfo(info);
+      })
+      .catch((error) => {
+        if (!disposed) setLogError(error instanceof Error ? error.message : '读取日志路径失败');
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   function clearLocalUiCache() {
     try {
       localStorage.removeItem('xhs_design_tweaks');
@@ -3620,8 +4364,28 @@ function SettingsView({
     }
     setTweak('theme', TWEAK_DEFAULTS.theme);
     setTweak('font', TWEAK_DEFAULTS.font);
-    setTweak('density', TWEAK_DEFAULTS.density);
     setTweak('defaultView', TWEAK_DEFAULTS.defaultView);
+  }
+
+  async function clearLogs() {
+    if (!window.confirm('清理历史日志文件？当前会话日志会保留，latest.log 会在退出时重新生成。')) {
+      return;
+    }
+    setIsClearingLogs(true);
+    setLogMessage('');
+    setLogError('');
+    try {
+      const result = await libraryApi.clearLogFiles();
+      setLogInfo(result.info);
+      setLogMessage(result.message);
+      if (result.failed.length > 0) {
+        setLogError(result.failed.join('；'));
+      }
+    } catch (error) {
+      setLogError(error instanceof Error ? error.message : '清理日志失败');
+    } finally {
+      setIsClearingLogs(false);
+    }
   }
 
   function applyAiPreset(index: number) {
@@ -3671,6 +4435,53 @@ function SettingsView({
     }
   }
 
+  const activePrompt = promptDrafts.find((prompt) => prompt.key === activePromptKey) ?? promptDrafts[0] ?? null;
+
+  function updateActivePrompt(patch: Partial<AiPromptEditorItem>) {
+    if (!activePrompt) return;
+    setPromptDrafts((current) => current.map((prompt) => (
+      prompt.key === activePrompt.key ? { ...prompt, ...patch } : prompt
+    )));
+  }
+
+  async function saveAiPrompts() {
+    setIsSavingPrompts(true);
+    setPromptMessage('');
+    setPromptError('');
+    try {
+      const saved = await libraryApi.saveAiPromptSettings({ prompts: promptDrafts });
+      setPromptSettings(saved);
+      setPromptDrafts(saved.prompts);
+      setPromptMessage('AI Prompt 已保存。');
+      setPromptError(saved.validationError ?? '');
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : '保存 AI Prompt 失败');
+    } finally {
+      setIsSavingPrompts(false);
+    }
+  }
+
+  async function resetAiPrompts() {
+    if (!window.confirm('恢复内置 AI Prompt？当前自定义 prompt 文件会被删除。')) {
+      return;
+    }
+    setIsSavingPrompts(true);
+    setPromptMessage('');
+    setPromptError('');
+    try {
+      const reset = await libraryApi.resetAiPromptSettings();
+      setPromptSettings(reset);
+      setPromptDrafts(reset.prompts);
+      setActivePromptKey(reset.prompts[0]?.key ?? 'classify_uncategorized');
+      setPromptMessage('AI Prompt 已恢复默认。');
+      setPromptError(reset.validationError ?? '');
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : '恢复默认 Prompt 失败');
+    } finally {
+      setIsSavingPrompts(false);
+    }
+  }
+
   return (
     <div className="settings-view fade-in">
       <div className="panel span2">
@@ -3704,16 +4515,6 @@ function SettingsView({
               <button className={t.font === 'sans' ? 'on' : ''} onClick={() => setTweak('font', 'sans')} type="button">现代黑体</button>
               <button className={t.font === 'serif' ? 'on' : ''} onClick={() => setTweak('font', 'serif')} type="button">杂志宋体</button>
               <button className={t.font === 'kai' ? 'on' : ''} onClick={() => setTweak('font', 'kai')} type="button">手账楷体</button>
-            </div>
-          </div>
-          <div className="set-row">
-            <div className="sr-info">
-              <strong>信息密度</strong>
-              <span>舒适留更多空白，紧凑一屏看更多</span>
-            </div>
-            <div className="choice">
-              <button className={t.density === 'comfy' ? 'on' : ''} onClick={() => setTweak('density', 'comfy')} type="button">舒适</button>
-              <button className={t.density === 'compact' ? 'on' : ''} onClick={() => setTweak('density', 'compact')} type="button">紧凑</button>
             </div>
           </div>
         </div>
@@ -3899,6 +4700,142 @@ function SettingsView({
         </div>
       </div>
 
+      <div className="panel span2 prompt-panel">
+        <div className="panel-head">
+          <Icon name="fileText" size={16} />
+          <h3>AI Prompt</h3>
+          <span className="count">{promptSettings?.isCustom ? '自定义' : '默认'}</span>
+          <button
+            className="btn btn-quiet btn-sm sec-action"
+            disabled={!promptSettings?.isCustom || !promptSettings?.path}
+            onClick={() => void openLocalPath(promptSettings?.path ?? null, true)}
+            type="button"
+          >
+            <Icon name="folderInput" size={15} />
+            显示文件
+          </button>
+        </div>
+        <div className="prompt-body">
+          <div className="prompt-tabs" role="tablist" aria-label="AI Prompt 任务">
+            {promptDrafts.map((prompt) => (
+              <button
+                aria-selected={prompt.key === activePrompt?.key}
+                className={prompt.key === activePrompt?.key ? 'on' : ''}
+                key={prompt.key}
+                onClick={() => setActivePromptKey(prompt.key)}
+                role="tab"
+                type="button"
+              >
+                {prompt.label}
+              </button>
+            ))}
+          </div>
+
+          {isLoadingPrompts ? (
+            <div className="prompt-empty">
+              <Icon name="loader" size={16} className="spin" />
+              <span>正在读取 Prompt</span>
+            </div>
+          ) : activePrompt ? (
+            <div className="prompt-editor">
+              <label className="ai-field full">
+                <span>System</span>
+                <textarea
+                  className="cookie-field prompt-textarea"
+                  onChange={(event) => updateActivePrompt({ system: event.target.value })}
+                  spellCheck={false}
+                  value={activePrompt.system}
+                />
+              </label>
+
+              {activePrompt.user !== null && activePrompt.user !== undefined && (
+                <label className="ai-field full">
+                  <span>User</span>
+                  <textarea
+                    className="cookie-field prompt-textarea"
+                    onChange={(event) => updateActivePrompt({ user: event.target.value })}
+                    spellCheck={false}
+                    value={activePrompt.user ?? ''}
+                  />
+                </label>
+              )}
+
+              {activePrompt.task !== null && activePrompt.task !== undefined && (
+                <label className="ai-field full">
+                  <span>Task</span>
+                  <textarea
+                    className="cookie-field prompt-textarea prompt-textarea-tall"
+                    onChange={(event) => updateActivePrompt({ task: event.target.value })}
+                    spellCheck={false}
+                    value={activePrompt.task ?? ''}
+                  />
+                </label>
+              )}
+
+              {(activePrompt.key === 'tag_merge_suggestions' || activePrompt.rules.length > 0) && (
+                <label className="ai-field full">
+                  <span>Rules</span>
+                  <textarea
+                    className="cookie-field prompt-textarea"
+                    onChange={(event) => updateActivePrompt({
+                      rules: event.target.value
+                        .split('\n')
+                        .map((line) => line.trim())
+                        .filter(Boolean),
+                    })}
+                    spellCheck={false}
+                    value={activePrompt.rules.join('\n')}
+                  />
+                </label>
+              )}
+
+              {activePrompt.schemaText !== null && activePrompt.schemaText !== undefined && (
+                <label className="ai-field full">
+                  <span>{activePrompt.schemaKind === 'return_json_shape' ? 'Return JSON shape' : 'Output schema'}</span>
+                  <textarea
+                    className="cookie-field prompt-textarea prompt-schema"
+                    onChange={(event) => updateActivePrompt({ schemaText: event.target.value })}
+                    spellCheck={false}
+                    value={activePrompt.schemaText ?? ''}
+                  />
+                </label>
+              )}
+            </div>
+          ) : (
+            <div className="prompt-empty">
+              <Icon name="alert" size={16} />
+              <span>没有可编辑的 Prompt</span>
+            </div>
+          )}
+        </div>
+
+        {(promptMessage || promptError || promptSettings?.validationError) && (
+          <div className="ai-form-status">
+            <div className={`note-banner ${promptError || promptSettings?.validationError ? 'warn' : 'ok'}`}>
+              <Icon name={promptError || promptSettings?.validationError ? 'alert' : 'checkCircle'} size={15} />
+              <div>{promptError || promptSettings?.validationError || promptMessage}</div>
+            </div>
+          </div>
+        )}
+
+        <div className="ai-form-foot">
+          <span className="ai-foot-hint">
+            <Icon name="fileText" size={13} />
+            {promptSettings?.path ?? 'Prompt 文件路径读取中'}
+          </span>
+          <div className="ai-foot-actions">
+            <button className="btn btn-ghost" disabled={isSavingPrompts || isLoadingPrompts} onClick={() => void resetAiPrompts()} type="button">
+              <Icon name="rotateCw" size={16} />
+              恢复默认
+            </button>
+            <button className="btn btn-primary" disabled={isSavingPrompts || isLoadingPrompts || promptDrafts.length === 0} onClick={() => void saveAiPrompts()} type="button">
+              <Icon name={isSavingPrompts ? 'loader' : 'check'} size={16} className={isSavingPrompts ? 'spin' : ''} />
+              保存 Prompt
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panel-head">
           <Icon name="user" size={16} />
@@ -3993,6 +4930,45 @@ function SettingsView({
         </div>
       </div>
 
+      <div className="panel">
+        <div className="panel-head">
+          <Icon name="fileText" size={16} />
+          <h3>诊断日志</h3>
+          <button className="btn btn-quiet btn-sm sec-action" disabled={!logInfo?.logDir} onClick={() => void openLocalPath(logInfo?.logDir ?? null)} type="button">
+            <Icon name="folder" size={15} />
+            打开目录
+          </button>
+        </div>
+        <div className="panel-pad flush">
+          <div className="set-row">
+            <div className="sr-info">
+              <strong>当前会话</strong>
+              <span className="mono">{logInfo?.currentLogPath ?? '读取中'}</span>
+            </div>
+            <button className="btn btn-quiet btn-sm" disabled={!logInfo?.currentLogExists} onClick={() => void openLocalPath(logInfo?.currentLogPath ?? null, true)} type="button">
+              <Icon name="folderInput" size={15} />
+              显示
+            </button>
+          </div>
+          <div className="set-row">
+            <div className="sr-info">
+              <strong>latest.log</strong>
+              <span className="mono">{logInfo?.latestLogPath ?? '正常退出后生成'}</span>
+            </div>
+            <button className="btn btn-quiet btn-sm" disabled={!logInfo?.latestLogExists} onClick={() => void openLocalPath(logInfo?.latestLogPath ?? null, true)} type="button">
+              <Icon name="folderInput" size={15} />
+              显示
+            </button>
+          </div>
+          {(logMessage || logError) && (
+            <div className={`note-banner ${logError ? 'warn' : 'ok'} log-status`}>
+              <Icon name={logError ? 'alert' : 'checkCircle'} size={15} />
+              <div>{logError || logMessage}</div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="panel danger-zone span2">
         <div className="panel-head">
           <Icon name="trash" size={16} />
@@ -4029,6 +5005,16 @@ function SettingsView({
               <button className="btn btn-ghost btn-sm" onClick={clearLocalUiCache} type="button">
                 <Icon name="sparkles" size={15} />
                 清空缓存
+              </button>
+            </div>
+            <div className="danger-item">
+              <div>
+                <strong>清理日志</strong>
+                <span>删除历史日志文件，保留当前会话日志用于排查问题。</span>
+              </div>
+              <button className="btn btn-ghost btn-sm" disabled={isClearingLogs} onClick={() => void clearLogs()} type="button">
+                <Icon name={isClearingLogs ? 'loader' : 'trash'} size={15} className={isClearingLogs ? 'spin' : ''} />
+                {isClearingLogs ? '清理中' : '清理日志'}
               </button>
             </div>
             <div className="danger-item danger-item-primary">
@@ -4078,7 +5064,7 @@ function Cover({
   return (
     <div className="cover" style={{ '--cover-grad': coverGrad(cat, seed) } as CSSProperties}>
       {preview?.kind === 'video' ? (
-        <video className="cover-media" muted playsInline preload="metadata" src={preview.src} />
+        <video className="cover-media" muted playsInline preload="none" src={preview.src} />
       ) : preview?.src ? (
         <img alt="" className="cover-media" loading="lazy" referrerPolicy="no-referrer" src={preview.src} />
       ) : (
@@ -4205,134 +5191,4 @@ function DownloadBadge({ status }: { status: DownloadStatus }) {
       {meta.label}
     </span>
   );
-}
-
-function splitTagInput(value: string) {
-  const seen = new Set<string>();
-  return value
-    .split(/[,，;；\n\t]/)
-    .map((item) => item.trim().replace(/^#/, '').trim())
-    .filter((item) => {
-      if (!item) return false;
-      const key = item.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 32);
-}
-
-function matchFilter(note: NoteSummary, filter: LibraryFilter) {
-  if (filter === 'all') return true;
-  if (filter === 'attention') {
-    const flags = noteFlags(note);
-    return flags.remoteMissing || flags.failed || flags.coverMissing;
-  }
-  return note.status === filter;
-}
-
-function noteFlags(note: NoteSummary) {
-  const remoteMissing = Boolean(note.remoteMissingAt);
-  const failed = note.media.some((asset) => asset.downloadStatus === 'failed');
-  const pendingMedia = note.media.filter((asset) => asset.mediaType !== 'video' && asset.downloadStatus !== 'downloaded').length;
-  const hasLocalPreview = note.media.some(
-    (asset) =>
-      (asset.mediaType === 'cover' || asset.mediaType === 'image' || asset.mediaType === 'video') &&
-      asset.downloadStatus === 'downloaded',
-  );
-  const coverMissing = note.media.length > 0 && !hasLocalPreview;
-  return { remoteMissing, failed, pendingMedia, coverMissing };
-}
-
-function noteTime(note: NoteSummary) {
-  const collected = parseAppTime(note.collectedAt);
-  if (!Number.isNaN(collected)) return collected;
-  if (note.favoriteOrder) return Date.now() - note.favoriteOrder;
-  return parseAppTime(note.lastSeenAt ?? note.lastSyncedAt);
-}
-
-function coverPalette(category?: string | null): [string, string] {
-  return COVER_PALETTE[category || '未分类'] || COVER_PALETTE['未分类'];
-}
-
-function coverGrad(category?: string | null, seed = 150) {
-  const [a, b] = coverPalette(category);
-  return `linear-gradient(${seed}deg, ${a}, ${b})`;
-}
-
-function hashSeed(value?: string | null) {
-  let hash = 0;
-  for (let index = 0; index < (value || '').length; index += 1) {
-    hash = (hash * 31 + (value || '').charCodeAt(index)) % 360;
-  }
-  return 110 + (hash % 70);
-}
-
-function relTime(value?: string | null) {
-  if (!value) return '';
-  const time = parseAppTime(value);
-  if (Number.isNaN(time)) return '';
-  const diff = Date.now() - time;
-  const minute = Math.floor(diff / 60000);
-  if (minute < 1) return '刚刚';
-  if (minute < 60) return `${minute} 分钟前`;
-  const hour = Math.floor(minute / 60);
-  if (hour < 24) return `${hour} 小时前`;
-  const day = Math.floor(hour / 24);
-  if (day === 1) return '昨天';
-  if (day < 7) return `${day} 天前`;
-  if (day < 30) return `${Math.floor(day / 7)} 周前`;
-  if (day < 365) return `${Math.floor(day / 30)} 个月前`;
-  return `${Math.floor(day / 365)} 年前`;
-}
-
-function shortDate(value?: string | null) {
-  if (!value) return '';
-  const date = appDate(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function fullDate(value?: string | null) {
-  if (!value) return '-';
-  const date = appDate(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-function appDate(value?: string | null) {
-  return new Date(normalizeAppTimestamp(value));
-}
-
-function parseAppTime(value?: string | null) {
-  return appDate(value).getTime();
-}
-
-function normalizeAppTimestamp(value?: string | null) {
-  const text = (value ?? '').trim();
-  if (!text) return 'Invalid Date';
-  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)) {
-    return `${text.replace(' ', 'T')}Z`;
-  }
-  return text;
-}
-
-function fileSize(bytes?: number | null) {
-  if (!bytes) return '-';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
-function durationFmt(ms?: number | null) {
-  if (!ms) return '';
-  const seconds = Math.round(ms / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-}
-
-function favTimeLabel(note: NoteSummary) {
-  if (note.collectedAt) return `收藏于 ${relTime(note.collectedAt)}`;
-  if (note.favoriteOrder) return `收藏序 #${note.favoriteOrder}`;
-  return `同步 ${relTime(note.lastSeenAt ?? note.lastSyncedAt)}`;
 }
