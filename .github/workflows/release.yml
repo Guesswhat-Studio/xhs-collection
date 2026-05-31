@@ -108,3 +108,121 @@ jobs:
           retryAttempts: 2
           updaterJsonPreferNsis: true
           assetNamePattern: 'XHS-Collection-[version]-[platform]-[arch]-[bundle][ext]'
+
+  publish-release:
+    name: Publish draft release
+    needs: build
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAURI_VERSION="$(node -e "const fs=require('fs'); console.log(JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8')).version)")"
+          if [ "$VERSION" != "$TAURI_VERSION" ]; then
+            echo "::error::package.json version ($VERSION) does not match src-tauri/tauri.conf.json version ($TAURI_VERSION)."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect existing release
+        id: release_state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          git fetch --tags --force
+
+          TAG_EXISTS=false
+          TAG_MATCHES=false
+          RELEASE_EXISTS=false
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            TAG_EXISTS=true
+            TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+            if [ "$TAG_COMMIT" = "$GITHUB_SHA" ]; then
+              TAG_MATCHES=true
+            fi
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          fi
+
+          echo "tag_exists=$TAG_EXISTS" >> "$GITHUB_OUTPUT"
+          echo "tag_matches=$TAG_MATCHES" >> "$GITHUB_OUTPUT"
+          echo "release_exists=$RELEASE_EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Skip already released version
+        if: ${{ steps.release_state.outputs.release_exists == 'true' }}
+        run: |
+          echo "::notice::${{ steps.version.outputs.tag }} already has a GitHub release. Skipping release publication."
+
+      - name: Validate reusable tag
+        if: ${{ steps.release_state.outputs.release_exists != 'true' && steps.release_state.outputs.tag_exists == 'true' && steps.release_state.outputs.tag_matches != 'true' }}
+        run: |
+          echo "::error::${{ steps.version.outputs.tag }} already exists and points to a different commit. Bump the app version before publishing another release."
+          exit 1
+
+      - name: Create release tag
+        if: ${{ steps.release_state.outputs.release_exists != 'true' && steps.release_state.outputs.tag_exists != 'true' }}
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "XHS Collection $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Download build artifacts
+        if: ${{ steps.release_state.outputs.release_exists != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Prepare release notes
+        if: ${{ steps.release_state.outputs.release_exists != 'true' }}
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const tag = process.env.TAG;
+          const text = fs.readFileSync('RELEASE_NOTES.md', 'utf8');
+          const start = text.indexOf(`## ${tag}`);
+          let body = `XHS Collection ${tag} desktop preview release.`;
+          if (start >= 0) {
+            const rest = text.slice(start);
+            const next = rest.slice(1).search(/\n## /);
+            body = (next >= 0 ? rest.slice(0, next + 1) : rest).trim();
+          }
+          fs.writeFileSync('release-body.md', `${body}\n`);
+          NODE
+
+      - name: Create draft release and upload bundles
+        if: ${{ steps.release_state.outputs.release_exists != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          gh release create "$TAG" \
+            --draft \
+            --title "XHS Collection $TAG" \
+            --notes-file release-body.md \
+            --target "$GITHUB_SHA"
+
+          while IFS= read -r -d '' file; do
+            gh release upload "$TAG" "$file" --clobber
+          done < <(find release-assets -type f -print0)
