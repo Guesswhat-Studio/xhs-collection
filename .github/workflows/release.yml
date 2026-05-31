@@ -120,6 +120,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
       - name: Resolve release version
         id: version
         shell: bash
@@ -225,4 +231,12 @@ jobs:
 
           while IFS= read -r -d '' file; do
             gh release upload "$TAG" "$file" --clobber
-          done < <(find release-assets -type f -print0)
+          done < <(find release-assets -type f \( \
+            -name "*.exe" -o -name "*.exe.sig" -o \
+            -name "*.msi" -o -name "*.msi.sig" -o \
+            -name "*.dmg" -o \
+            -name "*.deb" -o \
+            -name "*.AppImage" -o \
+            -name "*.tar.gz" -o -name "*.tar.gz.sig" -o \
+            -name "latest.json" \
+          \) -print0)
