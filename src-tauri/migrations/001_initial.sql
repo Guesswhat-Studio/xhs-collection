@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS tags (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS tag_aliases (
+  id TEXT PRIMARY KEY,
+  alias_name TEXT NOT NULL,
+  normalized_alias TEXT NOT NULL UNIQUE,
+  canonical_tag_id TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  confidence REAL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (canonical_tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS ai_settings (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL DEFAULT 'openai_compatible',
@@ -112,6 +124,14 @@ CREATE TABLE IF NOT EXISTS albums (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
   description TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'local',
+  source_album_id TEXT,
+  source_account_id TEXT,
+  source_url TEXT,
+  cover_url TEXT,
+  note_count INTEGER,
+  raw_json TEXT,
+  last_synced_at TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -208,6 +228,8 @@ CREATE INDEX IF NOT EXISTS idx_notes_last_synced_at ON notes(last_synced_at);
 CREATE INDEX IF NOT EXISTS idx_notes_remote_status ON notes(remote_status);
 CREATE INDEX IF NOT EXISTS idx_notes_collected_at ON notes(collected_at);
 CREATE INDEX IF NOT EXISTS idx_notes_favorite_order ON notes(favorite_order);
+CREATE INDEX IF NOT EXISTS idx_albums_source ON albums(source, source_account_id, source_album_id);
+CREATE INDEX IF NOT EXISTS idx_album_notes_note_id ON album_notes(note_id);
 CREATE INDEX IF NOT EXISTS idx_media_assets_note_id ON media_assets(note_id);
 CREATE INDEX IF NOT EXISTS idx_media_assets_download_status ON media_assets(download_status);
 CREATE INDEX IF NOT EXISTS idx_storage_roots_kind ON storage_roots(kind);

@@ -10,6 +10,8 @@ use chrono::Utc;
 use rusqlite::params;
 use serde_json::json;
 use std::fs;
+use std::io::{Read, Seek, Write};
+use std::path::Path;
 use tauri::AppHandle;
 #[tauri::command]
 pub(crate) fn get_library_overview(app: AppHandle) -> Result<LibraryOverview, String> {
@@ -49,6 +51,8 @@ pub(crate) fn reset_library_data(app: AppHandle) -> Result<LibraryOverview, Stri
             "DELETE FROM sync_run_items;
              DELETE FROM sync_runs;
              DELETE FROM sync_checkpoints;
+             DELETE FROM album_notes;
+             DELETE FROM albums;
              DELETE FROM media_assets;
              DELETE FROM note_tags;
              DELETE FROM notes;
@@ -312,6 +316,303 @@ pub(crate) fn export_library(
             display_path(export_path)
         ),
     })
+}
+
+#[tauri::command]
+pub(crate) fn create_library_backup(app: AppHandle) -> Result<LibraryBackupResult, String> {
+    let (paths, conn) = open_library(&app)?;
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(FULL);");
+    let overview = library_overview(&app, &paths, &conn)?;
+    drop(conn);
+
+    let backup_dir = paths.app_data_dir.join("backups");
+    fs::create_dir_all(&backup_dir).map_err(|error| {
+        format!(
+            "创建备份目录失败 {}：{error}",
+            display_path(backup_dir.clone())
+        )
+    })?;
+    let backup_path = backup_dir.join(format!(
+        "xhs-collection-backup-{}.zip",
+        Utc::now().format("%Y%m%d-%H%M%S")
+    ));
+
+    let backup_file = fs::File::create(&backup_path).map_err(|error| {
+        format!(
+            "创建备份文件失败 {}：{error}",
+            display_path(backup_path.clone())
+        )
+    })?;
+    let mut zip = StoredZipWriter::new(backup_file);
+    let manifest = json!({
+        "app": "XHS Collection",
+        "createdAt": Utc::now().to_rfc3339(),
+        "profile": {
+            "id": overview.active_profile.id,
+            "displayName": overview.active_profile.display_name,
+            "source": overview.active_profile.source,
+            "sourceAccountId": overview.active_profile.source_account_id,
+        },
+        "counts": {
+            "notes": overview.notes_count,
+            "mediaAssets": overview.media_count,
+        },
+        "paths": {
+            "database": "library.sqlite",
+            "media": "media/",
+        }
+    });
+    zip.add_bytes("manifest.json", manifest.to_string().as_bytes())
+        .map_err(|error| format!("写入备份清单失败：{error}"))?;
+
+    if paths.db_path.exists() {
+        zip.add_file(&paths.db_path, "library.sqlite")
+            .map_err(|error| format!("写入 SQLite 备份失败：{error}"))?;
+    }
+
+    let profile_registry = paths
+        .app_data_dir
+        .join(crate::constants::PROFILE_REGISTRY_DB);
+    if profile_registry.exists() {
+        zip.add_file(&profile_registry, crate::constants::PROFILE_REGISTRY_DB)
+            .map_err(|error| format!("写入本地账号索引失败：{error}"))?;
+    }
+
+    if paths.media_dir.exists() {
+        add_directory_to_backup(&mut zip, &paths.media_dir, "media")
+            .map_err(|error| format!("写入媒体目录备份失败：{error}"))?;
+    }
+
+    let file_count = zip.file_count();
+    zip.finish()
+        .map_err(|error| format!("完成备份文件失败：{error}"))?;
+    let size_bytes = fs::metadata(&backup_path)
+        .map(|metadata| metadata.len() as i64)
+        .unwrap_or(0);
+
+    Ok(LibraryBackupResult {
+        path: display_path(backup_path.clone()),
+        file_count,
+        size_bytes,
+        message: format!(
+            "已生成整库备份：{} 个文件，{}。",
+            file_count,
+            display_path(backup_path)
+        ),
+    })
+}
+
+fn add_directory_to_backup<W: Write + Seek>(
+    zip: &mut StoredZipWriter<W>,
+    root: &Path,
+    zip_root: &str,
+) -> Result<(), String> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir)
+            .map_err(|error| format!("读取目录失败 {}：{error}", display_path(dir.clone())))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
+            let zip_name = format!("{}/{}", zip_root.trim_end_matches('/'), zip_path(relative));
+            zip.add_file(&path, &zip_name)?;
+        }
+    }
+    Ok(())
+}
+
+fn zip_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(sanitize_zip_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn sanitize_zip_segment(segment: &str) -> String {
+    segment
+        .chars()
+        .map(|ch| match ch {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
+struct StoredZipWriter<W: Write + Seek> {
+    inner: W,
+    entries: Vec<ZipEntry>,
+}
+
+struct ZipEntry {
+    name: String,
+    crc32: u32,
+    size: u32,
+    local_header_offset: u32,
+}
+
+impl<W: Write + Seek> StoredZipWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            entries: Vec::new(),
+        }
+    }
+
+    fn file_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn add_file(&mut self, path: &Path, zip_name: &str) -> Result<(), String> {
+        let mut file = fs::File::open(path).map_err(|error| {
+            format!("打开文件失败 {}：{error}", display_path(path.to_path_buf()))
+        })?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(|error| {
+            format!("读取文件失败 {}：{error}", display_path(path.to_path_buf()))
+        })?;
+        self.add_bytes(zip_name, &bytes)
+    }
+
+    fn add_bytes(&mut self, zip_name: &str, bytes: &[u8]) -> Result<(), String> {
+        let name = normalize_zip_name(zip_name)?;
+        let size = u32::try_from(bytes.len())
+            .map_err(|_| format!("备份文件过大，无法写入 zip：{name}"))?;
+        let offset = u32::try_from(
+            self.inner
+                .stream_position()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|_| "备份文件超过 zip32 大小限制。".to_string())?;
+        let crc32 = crc32(bytes);
+        let name_bytes = name.as_bytes();
+        let name_len = u16::try_from(name_bytes.len())
+            .map_err(|_| format!("备份路径过长，无法写入 zip：{name}"))?;
+
+        write_u32(&mut self.inner, 0x0403_4b50)?;
+        write_u16(&mut self.inner, 20)?;
+        write_u16(&mut self.inner, 0)?;
+        write_u16(&mut self.inner, 0)?;
+        write_u16(&mut self.inner, 0)?;
+        write_u16(&mut self.inner, 0)?;
+        write_u32(&mut self.inner, crc32)?;
+        write_u32(&mut self.inner, size)?;
+        write_u32(&mut self.inner, size)?;
+        write_u16(&mut self.inner, name_len)?;
+        write_u16(&mut self.inner, 0)?;
+        self.inner
+            .write_all(name_bytes)
+            .map_err(|error| error.to_string())?;
+        self.inner
+            .write_all(bytes)
+            .map_err(|error| error.to_string())?;
+
+        self.entries.push(ZipEntry {
+            name,
+            crc32,
+            size,
+            local_header_offset: offset,
+        });
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(), String> {
+        let central_dir_offset = u32::try_from(
+            self.inner
+                .stream_position()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|_| "备份文件超过 zip32 大小限制。".to_string())?;
+
+        for entry in &self.entries {
+            let name_bytes = entry.name.as_bytes();
+            let name_len = u16::try_from(name_bytes.len())
+                .map_err(|_| format!("备份路径过长，无法写入 zip：{}", entry.name))?;
+            write_u32(&mut self.inner, 0x0201_4b50)?;
+            write_u16(&mut self.inner, 20)?;
+            write_u16(&mut self.inner, 20)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u32(&mut self.inner, entry.crc32)?;
+            write_u32(&mut self.inner, entry.size)?;
+            write_u32(&mut self.inner, entry.size)?;
+            write_u16(&mut self.inner, name_len)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u16(&mut self.inner, 0)?;
+            write_u32(&mut self.inner, 0)?;
+            write_u32(&mut self.inner, entry.local_header_offset)?;
+            self.inner
+                .write_all(name_bytes)
+                .map_err(|error| error.to_string())?;
+        }
+
+        let central_dir_size = u32::try_from(
+            self.inner
+                .stream_position()
+                .map_err(|error| error.to_string())?
+                - u64::from(central_dir_offset),
+        )
+        .map_err(|_| "备份文件超过 zip32 大小限制。".to_string())?;
+        let entry_count = u16::try_from(self.entries.len())
+            .map_err(|_| "备份文件数量超过 zip32 限制。".to_string())?;
+        write_u32(&mut self.inner, 0x0605_4b50)?;
+        write_u16(&mut self.inner, 0)?;
+        write_u16(&mut self.inner, 0)?;
+        write_u16(&mut self.inner, entry_count)?;
+        write_u16(&mut self.inner, entry_count)?;
+        write_u32(&mut self.inner, central_dir_size)?;
+        write_u32(&mut self.inner, central_dir_offset)?;
+        write_u16(&mut self.inner, 0)?;
+        self.inner.flush().map_err(|error| error.to_string())
+    }
+}
+
+fn normalize_zip_name(name: &str) -> Result<String, String> {
+    let normalized = name.replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains("../")
+        || normalized.contains("/..")
+    {
+        return Err(format!("非法备份路径：{name}"));
+    }
+    Ok(normalized)
+}
+
+fn write_u16<W: Write>(writer: &mut W, value: u16) -> Result<(), String> {
+    writer
+        .write_all(&value.to_le_bytes())
+        .map_err(|error| error.to_string())
+}
+
+fn write_u32<W: Write>(writer: &mut W, value: u32) -> Result<(), String> {
+    writer
+        .write_all(&value.to_le_bytes())
+        .map_err(|error| error.to_string())
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = if crc & 1 == 1 { 0xedb8_8320 } else { 0 };
+            crc = (crc >> 1) ^ mask;
+        }
+    }
+    !crc
 }
 
 fn validate_note_status(status: &str) -> Result<(), String> {

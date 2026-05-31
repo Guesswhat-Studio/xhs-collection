@@ -1,4 +1,5 @@
 mod ai;
+mod app_logs;
 mod app_runtime;
 mod commands;
 mod constants;

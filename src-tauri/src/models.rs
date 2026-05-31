@@ -46,9 +46,44 @@ pub(crate) struct LibraryOverview {
     pub(crate) media_dir: String,
     pub(crate) notes_count: i64,
     pub(crate) media_count: i64,
+    pub(crate) content_coverage: LibraryContentCoverage,
     pub(crate) storage_root_id: String,
     pub(crate) active_profile: LocalProfileSummary,
     pub(crate) profiles: Vec<LocalProfileSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LibraryContentCoverage {
+    pub(crate) total_notes: i64,
+    pub(crate) detail_notes: i64,
+    pub(crate) tagged_notes: i64,
+    pub(crate) media_notes: i64,
+    pub(crate) missing_detail_notes: i64,
+    pub(crate) missing_tag_notes: i64,
+    pub(crate) unique_tags: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LogFileInfo {
+    pub(crate) log_dir: String,
+    pub(crate) current_log_path: String,
+    pub(crate) latest_log_path: String,
+    pub(crate) current_log_name: String,
+    pub(crate) latest_log_name: String,
+    pub(crate) current_log_exists: bool,
+    pub(crate) latest_log_exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClearLogFilesResult {
+    pub(crate) deleted: usize,
+    pub(crate) kept: usize,
+    pub(crate) failed: Vec<String>,
+    pub(crate) message: String,
+    pub(crate) info: LogFileInfo,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +174,13 @@ pub(crate) struct XhsFavoriteSyncInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct XhsAlbumSyncInput {
+    pub(crate) max_albums: Option<usize>,
+    pub(crate) max_notes_per_album: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BatchJobInput {
     pub(crate) limit: Option<usize>,
     pub(crate) asset_id: Option<String>,
@@ -172,6 +214,23 @@ pub(crate) struct BatchJobProgress {
     pub(crate) indeterminate: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AiJobProgress {
+    pub(crate) task: String,
+    pub(crate) phase: String,
+    pub(crate) label: String,
+    pub(crate) detail: String,
+    pub(crate) planned: usize,
+    pub(crate) scanned: usize,
+    pub(crate) updated: usize,
+    pub(crate) failed: usize,
+    pub(crate) skipped: usize,
+    pub(crate) progress: u8,
+    pub(crate) indeterminate: bool,
+    pub(crate) error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct XhsFavoriteSyncResult {
@@ -192,6 +251,20 @@ pub(crate) struct XhsFavoriteSyncResult {
     pub(crate) covers_failed: usize,
     pub(crate) media_downloaded: usize,
     pub(crate) media_failed: usize,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct XhsAlbumSyncResult {
+    pub(crate) albums_scanned: usize,
+    pub(crate) albums_updated: usize,
+    pub(crate) notes_scanned: usize,
+    pub(crate) notes_linked: usize,
+    pub(crate) notes_inserted: usize,
+    pub(crate) notes_updated: usize,
+    pub(crate) duplicate_notes: usize,
+    pub(crate) skipped: usize,
     pub(crate) message: String,
 }
 
@@ -356,6 +429,34 @@ pub(crate) struct AiSettingsTestResult {
     pub(crate) model: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AiPromptEditorItem {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) system: String,
+    pub(crate) user: Option<String>,
+    pub(crate) task: Option<String>,
+    pub(crate) rules: Vec<String>,
+    pub(crate) schema_kind: Option<String>,
+    pub(crate) schema_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AiPromptSettings {
+    pub(crate) path: String,
+    pub(crate) is_custom: bool,
+    pub(crate) validation_error: Option<String>,
+    pub(crate) prompts: Vec<AiPromptEditorItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AiPromptSettingsInput {
+    pub(crate) prompts: Vec<AiPromptEditorItem>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AiClassifyInput {
@@ -375,6 +476,30 @@ pub(crate) struct AiSplitCategoryInput {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AiTagGroupInput {
     pub(crate) limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AiTagMergeSuggestInput {
+    pub(crate) limit: Option<usize>,
+    pub(crate) use_ai: Option<bool>,
+    pub(crate) min_confidence: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagMergeGroupInput {
+    pub(crate) canonical_tag: String,
+    pub(crate) duplicate_tags: Vec<String>,
+    pub(crate) confidence: Option<f64>,
+    pub(crate) source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagGovernanceApplyInput {
+    pub(crate) remove_tags: Vec<String>,
+    pub(crate) merge_groups: Vec<TagMergeGroupInput>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -425,6 +550,55 @@ pub(crate) struct AiTagGroupResult {
     pub(crate) message: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagGroupClearResult {
+    pub(crate) scanned: usize,
+    pub(crate) cleared: usize,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagCleanupIssue {
+    pub(crate) tag: String,
+    pub(crate) count: i64,
+    pub(crate) issue_kind: String,
+    pub(crate) action: String,
+    pub(crate) confidence: f64,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagMergeSuggestion {
+    pub(crate) canonical_tag: String,
+    pub(crate) duplicate_tags: Vec<String>,
+    pub(crate) affected_notes: i64,
+    pub(crate) confidence: f64,
+    pub(crate) reason: String,
+    pub(crate) source: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagGovernanceSuggestionResult {
+    pub(crate) scanned: usize,
+    pub(crate) cleanup_issues: Vec<TagCleanupIssue>,
+    pub(crate) merge_groups: Vec<TagMergeSuggestion>,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagGovernanceApplyResult {
+    pub(crate) removed_tags: usize,
+    pub(crate) merged_tags: usize,
+    pub(crate) aliases_created: usize,
+    pub(crate) affected_notes: usize,
+    pub(crate) message: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AiNoteDigest {
     pub(crate) id: String,
@@ -450,7 +624,7 @@ pub(crate) struct NoteFetchTarget {
     pub(crate) source_url: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct MediaDownloadTarget {
     pub(crate) id: String,
     pub(crate) note_id: String,
@@ -459,6 +633,15 @@ pub(crate) struct MediaDownloadTarget {
     pub(crate) media_type: String,
     pub(crate) original_url: String,
     pub(crate) mime_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LibraryBackupResult {
+    pub(crate) path: String,
+    pub(crate) file_count: usize,
+    pub(crate) size_bytes: i64,
+    pub(crate) message: String,
 }
 
 #[derive(Debug)]
@@ -474,6 +657,7 @@ pub(crate) struct VideoStreamCandidate {
 #[derive(Debug)]
 pub(crate) enum XhsDetailFetchError {
     Gone(u16),
+    NeedsVerification(String),
     Other(String),
 }
 

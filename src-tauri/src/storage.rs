@@ -41,6 +41,7 @@ pub(crate) fn library_overview(
 ) -> Result<LibraryOverview, String> {
     let notes_count = count_rows(conn, "notes")?;
     let media_count = count_rows(conn, "media_assets")?;
+    let content_coverage = library_content_coverage(conn).map_err(|error| error.to_string())?;
     let (_, registry) = open_profile_registry(app)?;
     let profiles = read_local_profiles(&registry).map_err(|error| error.to_string())?;
     let summaries = profile_summaries(&paths.app_data_dir, profiles);
@@ -56,10 +57,36 @@ pub(crate) fn library_overview(
         media_dir: display_path(paths.media_dir.clone()),
         notes_count,
         media_count,
+        content_coverage,
         storage_root_id: STORAGE_ROOT_ID.to_string(),
         active_profile,
         profiles: summaries,
     })
+}
+
+fn library_content_coverage(conn: &Connection) -> rusqlite::Result<LibraryContentCoverage> {
+    let total_notes = count_rows_sql(conn, "SELECT COUNT(*) FROM notes")?;
+    let detail_notes = count_rows_sql(
+        conn,
+        "SELECT COUNT(*) FROM notes WHERE COALESCE(content, '') <> ''",
+    )?;
+    let tagged_notes = count_rows_sql(conn, "SELECT COUNT(DISTINCT note_id) FROM note_tags")?;
+    let media_notes = count_rows_sql(conn, "SELECT COUNT(DISTINCT note_id) FROM media_assets")?;
+    let unique_tags = count_rows_sql(conn, "SELECT COUNT(*) FROM tags")?;
+
+    Ok(LibraryContentCoverage {
+        total_notes,
+        detail_notes,
+        tagged_notes,
+        media_notes,
+        missing_detail_notes: total_notes.saturating_sub(detail_notes),
+        missing_tag_notes: total_notes.saturating_sub(tagged_notes),
+        unique_tags,
+    })
+}
+
+fn count_rows_sql(conn: &Connection, sql: &str) -> rusqlite::Result<i64> {
+    conn.query_row(sql, [], |row| row.get(0))
 }
 
 pub(crate) fn resolve_paths(app: &AppHandle) -> Result<LibraryPaths, String> {
@@ -87,14 +114,11 @@ pub(crate) fn open_profile_registry(app: &AppHandle) -> Result<(PathBuf, Connect
     let app_data_dir = app_data_dir(app)?;
     let db_path = app_data_dir.join(PROFILE_REGISTRY_DB);
     let conn = Connection::open(&db_path).map_err(|error| error.to_string())?;
-    ensure_profile_registry(&conn, &app_data_dir).map_err(|error| error.to_string())?;
+    ensure_profile_registry(&conn).map_err(|error| error.to_string())?;
     Ok((db_path, conn))
 }
 
-pub(crate) fn ensure_profile_registry(
-    conn: &Connection,
-    app_data_dir: &Path,
-) -> rusqlite::Result<()> {
+pub(crate) fn ensure_profile_registry(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS local_profiles (
            id TEXT PRIMARY KEY,
@@ -118,12 +142,8 @@ pub(crate) fn ensure_profile_registry(
 
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM local_profiles", [], |row| row.get(0))?;
     if count == 0 {
-        let legacy_db = app_data_dir.join("library.sqlite");
-        let (db_relative_path, media_relative_path) = if legacy_db.exists() {
-            ("library.sqlite".to_string(), "media".to_string())
-        } else {
-            ("library.sqlite".to_string(), "media".to_string())
-        };
+        let (db_relative_path, media_relative_path) =
+            ("library.sqlite".to_string(), "media".to_string());
         conn.execute(
             "INSERT OR IGNORE INTO local_profiles (
                 id, display_name, db_relative_path, media_relative_path,
@@ -362,7 +382,38 @@ pub(crate) fn ensure_schema_upgrades(conn: &Connection) -> rusqlite::Result<()> 
     )?;
     add_column_if_missing(conn, "notes", "author_id", "author_id TEXT")?;
     add_column_if_missing(conn, "notes", "remote_updated_at", "remote_updated_at TEXT")?;
+    add_column_if_missing(
+        conn,
+        "albums",
+        "source",
+        "source TEXT NOT NULL DEFAULT 'local'",
+    )?;
+    add_column_if_missing(conn, "albums", "source_album_id", "source_album_id TEXT")?;
+    add_column_if_missing(
+        conn,
+        "albums",
+        "source_account_id",
+        "source_account_id TEXT",
+    )?;
+    add_column_if_missing(conn, "albums", "source_url", "source_url TEXT")?;
+    add_column_if_missing(conn, "albums", "cover_url", "cover_url TEXT")?;
+    add_column_if_missing(conn, "albums", "note_count", "note_count INTEGER")?;
+    add_column_if_missing(conn, "albums", "raw_json", "raw_json TEXT")?;
+    add_column_if_missing(conn, "albums", "last_synced_at", "last_synced_at TEXT")?;
     add_column_if_missing(conn, "tags", "ai_group", "ai_group TEXT")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tag_aliases (
+            id TEXT PRIMARY KEY,
+            alias_name TEXT NOT NULL,
+            normalized_alias TEXT NOT NULL UNIQUE,
+            canonical_tag_id TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            confidence REAL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (canonical_tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );",
+    )?;
     add_column_if_missing(
         conn,
         "sync_runs",
@@ -411,6 +462,14 @@ pub(crate) fn ensure_schema_upgrades(conn: &Connection) -> rusqlite::Result<()> 
         "sync_checkpoints",
         "remote_display_count",
         "remote_display_count INTEGER",
+    )?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_albums_source
+            ON albums(source, source_account_id, source_album_id);
+         CREATE INDEX IF NOT EXISTS idx_album_notes_note_id
+            ON album_notes(note_id);
+         CREATE INDEX IF NOT EXISTS idx_tag_aliases_canonical
+            ON tag_aliases(canonical_tag_id);",
     )?;
     Ok(())
 }
@@ -576,6 +635,27 @@ pub(crate) fn upsert_tag_with_kind(
     name: &str,
     kind: &str,
 ) -> rusqlite::Result<String> {
+    let lookup_key = normalize_tag_alias_key(name);
+    if !lookup_key.is_empty() {
+        if let Some(canonical_id) = conn
+            .query_row(
+                "SELECT canonical_tag_id FROM tag_aliases WHERE normalized_alias = ?1 LIMIT 1",
+                params![lookup_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            conn.execute(
+                "UPDATE tags
+                 SET kind = CASE WHEN tags.kind = 'user' THEN tags.kind ELSE ?2 END,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![canonical_id, kind],
+            )?;
+            return Ok(canonical_id);
+        }
+    }
+
     let id = format!("tag:{name}");
     conn.execute(
         "INSERT INTO tags (id, name, kind)
@@ -585,11 +665,11 @@ pub(crate) fn upsert_tag_with_kind(
             updated_at = CURRENT_TIMESTAMP",
         params![id, name, kind],
     )?;
-    Ok(conn.query_row(
+    conn.query_row(
         "SELECT id FROM tags WHERE name = ?1",
         params![name],
         |row| row.get(0),
-    )?)
+    )
 }
 
 pub(crate) fn upsert_optional_category(
@@ -650,9 +730,9 @@ pub(crate) fn normalize_tag_names(values: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut tags = Vec::new();
     for raw in values {
-        for part in raw.split(|ch: char| matches!(ch, ',' | '，' | ';' | '；' | '\n' | '\t')) {
+        for part in raw.split([',', '，', ';', '；', '\n', '\t']) {
             let tag = part.trim().trim_start_matches('#').trim();
-            if tag.is_empty() || tag.len() > 64 {
+            if tag.is_empty() || tag.len() > 64 || is_noise_tag_name(tag) {
                 continue;
             }
             if seen.insert(tag.to_lowercase()) {
@@ -664,6 +744,70 @@ pub(crate) fn normalize_tag_names(values: Vec<String>) -> Vec<String> {
         }
     }
     tags
+}
+
+pub(crate) fn normalize_tag_alias_key(name: &str) -> String {
+    name.trim()
+        .trim_start_matches(&['#', '＃'][..])
+        .chars()
+        .filter_map(|ch| {
+            let mapped = match ch {
+                'Ａ'..='Ｚ' => char::from_u32(ch as u32 - 'Ａ' as u32 + 'A' as u32),
+                'ａ'..='ｚ' => char::from_u32(ch as u32 - 'ａ' as u32 + 'a' as u32),
+                '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32),
+                _ => Some(ch),
+            }?;
+            if mapped.is_whitespace()
+                || matches!(
+                    mapped,
+                    '_' | '-'
+                        | '－'
+                        | '—'
+                        | '/'
+                        | '\\'
+                        | '·'
+                        | '.'
+                        | '。'
+                        | ','
+                        | '，'
+                        | ':'
+                        | '：'
+                        | ';'
+                        | '；'
+                        | ' '
+                )
+            {
+                None
+            } else {
+                Some(mapped.to_lowercase().collect::<String>())
+            }
+        })
+        .collect::<String>()
+}
+
+pub(crate) fn is_noise_tag_name(name: &str) -> bool {
+    let value = name.trim().trim_start_matches(&['#', '＃'][..]).trim();
+    value.is_empty() || is_timecode_tag(value)
+}
+
+fn is_timecode_tag(value: &str) -> bool {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if !(2..=3).contains(&parts.len()) {
+        return false;
+    }
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return false;
+        }
+        if index == 0 {
+            if part.len() > 2 {
+                return false;
+            }
+        } else if part.len() != 2 {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn normalize_id_list(values: Vec<String>) -> Vec<String> {

@@ -5,7 +5,7 @@ export type DownloadStatus = 'not_downloaded' | 'queued' | 'downloading' | 'down
 export interface MediaAsset {
   id: string;
   noteId: string;
-  mediaType: 'video' | 'image' | 'cover';
+  mediaType: 'video' | 'image' | 'cover' | 'file';
   downloadStatus: DownloadStatus;
   originalUrl?: string | null;
   relativePath?: string | null;
@@ -48,9 +48,38 @@ export interface LibraryOverview {
   mediaDir: string;
   notesCount: number;
   mediaCount: number;
+  contentCoverage: LibraryContentCoverage;
   storageRootId: string;
   activeProfile: LocalProfileSummary;
   profiles: LocalProfileSummary[];
+}
+
+export interface LibraryContentCoverage {
+  totalNotes: number;
+  detailNotes: number;
+  taggedNotes: number;
+  mediaNotes: number;
+  missingDetailNotes: number;
+  missingTagNotes: number;
+  uniqueTags: number;
+}
+
+export interface LogFileInfo {
+  logDir: string;
+  currentLogPath: string;
+  latestLogPath: string;
+  currentLogName: string;
+  latestLogName: string;
+  currentLogExists: boolean;
+  latestLogExists: boolean;
+}
+
+export interface ClearLogFilesResult {
+  deleted: number;
+  kept: number;
+  failed: string[];
+  message: string;
+  info: LogFileInfo;
 }
 
 export interface LocalProfileSummary {
@@ -115,6 +144,28 @@ export interface AiSettingsTestResult {
   model: string;
 }
 
+export interface AiPromptEditorItem {
+  key: string;
+  label: string;
+  system: string;
+  user?: string | null;
+  task?: string | null;
+  rules: string[];
+  schemaKind?: 'output_schema' | 'return_json_shape' | string | null;
+  schemaText?: string | null;
+}
+
+export interface AiPromptSettings {
+  path: string;
+  isCustom: boolean;
+  validationError?: string | null;
+  prompts: AiPromptEditorItem[];
+}
+
+export interface AiPromptSettingsInput {
+  prompts: AiPromptEditorItem[];
+}
+
 export interface AiClassifyInput {
   limit?: number | null;
 }
@@ -128,6 +179,24 @@ export interface AiSplitCategoryInput {
 
 export interface AiTagGroupInput {
   limit?: number | null;
+}
+
+export interface AiTagMergeSuggestInput {
+  limit?: number | null;
+  useAi?: boolean | null;
+  minConfidence?: number | null;
+}
+
+export interface TagMergeGroupInput {
+  canonicalTag: string;
+  duplicateTags: string[];
+  confidence?: number | null;
+  source?: string | null;
+}
+
+export interface TagGovernanceApplyInput {
+  removeTags: string[];
+  mergeGroups: TagMergeGroupInput[];
 }
 
 export interface AiAssignmentResult {
@@ -165,6 +234,45 @@ export interface AiTagGroupResult {
   updated: number;
   groups: string[];
   assignments: AiTagAssignmentResult[];
+  message: string;
+}
+
+export interface TagGroupClearResult {
+  scanned: number;
+  cleared: number;
+  message: string;
+}
+
+export interface TagCleanupIssue {
+  tag: string;
+  count: number;
+  issueKind: string;
+  action: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface TagMergeSuggestion {
+  canonicalTag: string;
+  duplicateTags: string[];
+  affectedNotes: number;
+  confidence: number;
+  reason: string;
+  source: 'rule' | 'ai' | string;
+}
+
+export interface TagGovernanceSuggestionResult {
+  scanned: number;
+  cleanupIssues: TagCleanupIssue[];
+  mergeGroups: TagMergeSuggestion[];
+  message: string;
+}
+
+export interface TagGovernanceApplyResult {
+  removedTags: number;
+  mergedTags: number;
+  aliasesCreated: number;
+  affectedNotes: number;
   message: string;
 }
 
@@ -206,6 +314,23 @@ export interface XhsFavoriteSyncResult {
   coversFailed?: number;
   mediaDownloaded?: number;
   mediaFailed?: number;
+  message: string;
+}
+
+export interface XhsAlbumSyncInput {
+  maxAlbums?: number | null;
+  maxNotesPerAlbum?: number | null;
+}
+
+export interface XhsAlbumSyncResult {
+  albumsScanned: number;
+  albumsUpdated: number;
+  notesScanned: number;
+  notesLinked: number;
+  notesInserted: number;
+  notesUpdated: number;
+  duplicateNotes: number;
+  skipped: number;
   message: string;
 }
 
@@ -255,6 +380,21 @@ export interface BatchJobProgress {
   indeterminate: boolean;
 }
 
+export interface AiJobProgress {
+  task: 'classify_uncategorized' | 'split_category' | 'group_tags' | string;
+  phase: string;
+  label: string;
+  detail: string;
+  planned: number;
+  scanned: number;
+  updated: number;
+  failed: number;
+  skipped: number;
+  progress: number;
+  indeterminate: boolean;
+  error?: string | null;
+}
+
 export interface ExportLibraryInput {
   format: 'json' | 'csv' | 'markdown';
   includeMedia?: boolean | null;
@@ -270,8 +410,17 @@ export interface ExportLibraryResult {
   message: string;
 }
 
+export interface LibraryBackupResult {
+  path: string;
+  fileCount: number;
+  sizeBytes: number;
+  message: string;
+}
+
 export interface LibraryApi {
   getLibraryOverview(): Promise<LibraryOverview>;
+  getLogFileInfo(): Promise<LogFileInfo>;
+  clearLogFiles(): Promise<ClearLogFilesResult>;
   listLocalProfiles(): Promise<LocalProfileSummary[]>;
   switchLocalProfile(profileId: string): Promise<LibraryOverview>;
   deleteLibraryDatabase(): Promise<LibraryOverview>;
@@ -284,16 +433,27 @@ export interface LibraryApi {
   loadAiSettings(): Promise<AiSettings>;
   saveAiSettings(input: AiSettingsInput): Promise<AiSettings>;
   testAiSettings(): Promise<AiSettingsTestResult>;
+  loadAiPromptSettings(): Promise<AiPromptSettings>;
+  saveAiPromptSettings(input: AiPromptSettingsInput): Promise<AiPromptSettings>;
+  resetAiPromptSettings(): Promise<AiPromptSettings>;
   listTags(): Promise<TagSummary[]>;
+  clearAiTagGroups(): Promise<TagGroupClearResult>;
+  cancelAiTask(task?: string): Promise<void>;
   aiClassifyUncategorized(input: AiClassifyInput): Promise<AiClassificationResult>;
   aiSplitCategory(input: AiSplitCategoryInput): Promise<AiClassificationResult>;
   aiGroupTags(input: AiTagGroupInput): Promise<AiTagGroupResult>;
+  aiSuggestTagMerges(input: AiTagMergeSuggestInput): Promise<TagGovernanceSuggestionResult>;
+  applyTagGovernance(input: TagGovernanceApplyInput): Promise<TagGovernanceApplyResult>;
   exportLibrary(input: ExportLibraryInput): Promise<ExportLibraryResult>;
+  createLibraryBackup(): Promise<LibraryBackupResult>;
   loadXhsSavedSession(): Promise<XhsSessionTestResult | null>;
   openXhsLoginWindow(): Promise<void>;
   readXhsLoginCookies(): Promise<XhsSessionTestResult>;
   testXhsSession(cookie: string): Promise<XhsSessionTestResult>;
+  cancelXhsSync(): Promise<void>;
   syncXhsFavorites(input: XhsFavoriteSyncInput): Promise<XhsFavoriteSyncResult>;
+  syncXhsFiles(input: XhsFavoriteSyncInput): Promise<XhsFavoriteSyncResult>;
+  syncXhsAlbums(input: XhsAlbumSyncInput): Promise<XhsAlbumSyncResult>;
   enrichXhsNoteDetails(input: BatchJobInput): Promise<BatchJobResult>;
   downloadMediaAssets(input: BatchJobInput): Promise<BatchJobResult>;
 }
