@@ -8,11 +8,11 @@
    ================================================================= */
 
 /* ---------- Font schemes ---------- */
-:root[data-font="sans"]  { --font-body: "Noto Sans SC", ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
+:root[data-font="sans"]  { --font-body: "Noto Sans SC Variable", "Noto Sans SC", ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
                            --font-title: var(--font-body); --title-weight: 800; --title-tracking: -0.01em; }
-:root[data-font="serif"] { --font-body: "Noto Sans SC", ui-sans-serif, system-ui, "PingFang SC", sans-serif;
-                           --font-title: "Noto Serif SC", Georgia, "Songti SC", serif; --title-weight: 700; --title-tracking: 0; }
-:root[data-font="kai"]   { --font-body: "LXGW WenKai TC", "Noto Sans SC", "Kaiti SC", ui-sans-serif, system-ui, sans-serif;
+:root[data-font="serif"] { --font-body: "Noto Sans SC Variable", "Noto Sans SC", ui-sans-serif, system-ui, "PingFang SC", sans-serif;
+                           --font-title: "Noto Serif SC Variable", "Noto Serif SC", Georgia, "Songti SC", serif; --title-weight: 700; --title-tracking: 0; }
+:root[data-font="kai"]   { --font-body: "LXGW WenKai Screen", "LXGW WenKai TC", "LXGW WenKai", "KaiTi", "楷体", "STKaiti", "Kaiti SC", "BiauKai", "DFKai-SB", cursive;
                            --font-title: var(--font-body); --title-weight: 700; --title-tracking: 0.01em; }
 
 /* ---------- Light theme (淡粉) ---------- */
